@@ -276,72 +276,85 @@
   .summary .job{ font-weight:600; color: var(--ink); }
 
   .cards{
-    padding: 18px 22px 22px;
+    padding: 20px 24px 26px;
     display:grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 18px;
   }
   .cc{
     background:#FBFAF6;
     border: 1px solid var(--rule);
-    border-left: 4px solid var(--rule);
-    border-radius: 2px;
-    padding: 13px 14px 14px;
+    border-left: 5px solid var(--rule);
+    border-radius: 3px;
+    padding: 20px 20px 18px;
+    box-shadow: 0 1px 0 rgba(35,38,31,0.04), 0 6px 16px -12px rgba(35,38,31,0.3);
   }
   .cc.tier-high{ border-left-color: var(--teal); }
   .cc.tier-mid{ border-left-color: var(--amber); }
   .cc.tier-low{ border-left-color: var(--rule); }
 
-  .cc-top{ display:flex; justify-content: space-between; align-items:flex-start; gap:8px; }
-  .cc-name{ font-family:'Roboto Slab', serif; font-weight:600; font-size: 14.5px; }
-  .cc-score{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 11px; font-weight:600;
-    padding: 2px 7px; border-radius: 10px;
-    background: rgba(43,110,99,0.12); color: var(--teal-deep);
-    flex:none;
+  .cc-top{ display:flex; align-items:flex-start; gap:14px; }
+  .cc-avatar{
+    width: 50px; height: 50px; border-radius: 50%; flex: none;
+    background: var(--paper); border: 1px solid var(--rule);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Roboto Slab', serif; font-weight:700; font-size: 16px; color: var(--ink-soft);
   }
-  .cc.tier-mid .cc-score{ background: rgba(185,130,47,0.14); color: var(--amber); }
-  .cc.tier-low .cc-score{ background: rgba(91,90,77,0.12); color: var(--ink-soft); }
+  .cc.tier-high .cc-avatar{ border-color: var(--teal); color: var(--teal-deep); }
+  .cc.tier-mid .cc-avatar{ border-color: var(--amber); color: var(--amber); }
 
-  .cc-role{ font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
-  .cc-loc{ font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
-  .cc-summary{ font-size: 12px; margin-top: 8px; line-height:1.45; }
-  .cc-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top: 9px; }
+  .cc-id{ flex: 1; min-width:0; }
+  .cc-name{ font-family:'Roboto Slab', serif; font-weight:700; font-size: 18px; line-height:1.25; }
+  .cc-role{ font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+  .cc-loc{ font-size: 11.5px; color: var(--ink-soft); margin-top: 2px; }
+
+  .cc-ring{
+    flex: none; width: 56px; height: 56px; border-radius: 50%;
+    background: conic-gradient(var(--ring-color, var(--teal)) calc(var(--score, 0) * 1%), var(--rule) 0);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .cc-ring-inner{
+    width: 44px; height: 44px; border-radius: 50%; background: #FBFAF6;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Roboto Slab', serif; font-weight:700; font-size: 15px; color: var(--ring-color, var(--teal-deep));
+  }
+
+  .cc-headline{ font-size: 12px; color: var(--ink-soft); margin-top: 10px; line-height:1.4; font-style: italic; }
+  .cc-tags{ display:flex; flex-wrap:wrap; gap:6px; margin-top: 10px; }
   .cc-tag{
     font-family:'IBM Plex Mono', monospace;
-    font-size: 10px;
-    padding: 2px 6px;
+    font-size: 10.5px;
+    padding: 3px 8px;
     border: 1px solid var(--rule);
     border-radius: 10px;
     color: var(--ink-soft);
   }
-  .cc-foot{ display:flex; justify-content: space-between; align-items:center; margin-top: 10px; }
-  .cc-link{ font-size: 11px; color: var(--teal-deep); text-decoration:none; }
+  .cc-foot{ display:flex; justify-content: space-between; align-items:center; margin-top: 12px; }
+  .cc-link{ font-size: 12px; color: var(--teal-deep); text-decoration:none; font-weight:500; }
   .cc-link:hover{ text-decoration: underline; }
-  .cc-email{ font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); }
+  .cc-email{ font-family:'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
   .cc-crm{
-    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing:0.05em;
+    font-family:'IBM Plex Mono', monospace; font-size: 10px; letter-spacing:0.05em;
     text-transform: uppercase; color: var(--teal-deep);
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rule);
   }
 
-  .cc-headline{ font-size: 11px; color: var(--ink-soft); margin-top: 2px; line-height:1.35; font-style: italic; }
-  .cc-badges{ display:flex; gap:5px; margin-top: 6px; flex-wrap: wrap; }
+  .cc-badges{ display:flex; gap:6px; margin-top: 10px; flex-wrap: wrap; }
   .cc-badge{
-    font-family:'IBM Plex Mono', monospace; font-size: 9.5px;
-    padding: 1px 6px; border-radius: 8px; border: 1px solid var(--rule); color: var(--ink-soft);
+    font-family:'IBM Plex Mono', monospace; font-size: 10px;
+    padding: 2px 8px; border-radius: 8px; border: 1px solid var(--rule); color: var(--ink-soft);
   }
   .cc-badge.email-verified{ border-color: var(--teal); color: var(--teal-deep); }
   .cc-badge.email-extrapolated{ border-color: var(--amber); color: var(--amber); }
 
-  .cc-tabs{ display:flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--rule); }
+  .cc-tabs{ display:flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--rule); }
   .cc-tab-btn{
-    font-family:'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
-    background: none; border: none; padding: 4px 8px 6px; cursor: pointer;
+    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+    background: none; border: none; padding: 5px 10px 8px; cursor: pointer;
     color: var(--ink-soft); border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   .cc-tab-btn.active{ color: var(--teal-deep); border-bottom-color: var(--teal); }
-  .cc-tabpanel{ font-size: 12px; margin-top: 8px; line-height:1.45; }
+  .cc-tabpanel{ font-size: 12.5px; margin-top: 10px; line-height:1.5; }
   .cc-tabpanel[hidden]{ display:none; }
 
   /* ---------- History panel ---------- */
@@ -615,18 +628,26 @@
     if(candidates && candidates.length){
       candidates.forEach((c, idx) => {
         const score = c.fit_score;
-        const tier = tierFor(score);
+        const numericScore = typeof score === "number" ? score : parseFloat(score);
+        const tier = tierFor(numericScore);
+        const ringColor = tier === "tier-high" ? "var(--teal)" : tier === "tier-mid" ? "var(--amber)" : "var(--rule)";
         const el = document.createElement("div");
         el.className = "cc " + tier;
         const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
         const cardId = "cc-" + idx + "-" + Date.now();
+        const initials = (c.name || "?").trim().split(/\s+/).map(p => p[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
         el.innerHTML = `
           <div class="cc-top">
-            <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
-            <div class="cc-score">${score !== undefined && score !== null && score !== "" ? score : "—"}</div>
+            <div class="cc-avatar">${escapeHtml(initials || "?")}</div>
+            <div class="cc-id">
+              <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
+              <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
+              <div class="cc-loc">${escapeHtml(c.location || "")}</div>
+            </div>
+            <div class="cc-ring" style="--score:${!isNaN(numericScore) ? numericScore : 0}; --ring-color:${ringColor};">
+              <div class="cc-ring-inner">${!isNaN(numericScore) ? numericScore : "—"}</div>
+            </div>
           </div>
-          <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
-          <div class="cc-loc">${escapeHtml(c.location || "")}</div>
           ${c.headline ? `<div class="cc-headline">${escapeHtml(c.headline)}</div>` : ""}
           <div class="cc-badges">
             ${c.network_distance ? `<span class="cc-badge">${escapeHtml(formatDistance(c.network_distance))}</span>` : ""}
@@ -648,7 +669,7 @@
             </span>
             ${c.email && c.email !== "Not found" ? `<span class="cc-email">${escapeHtml(c.email)}</span>` : ""}
           </div>
-          ${(tier === "tier-high" || tier === "tier-mid") && score > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
+          ${(tier === "tier-high" || tier === "tier-mid") && numericScore > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
         `;
         cardsWrap.appendChild(el);
       });
