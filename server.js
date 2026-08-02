@@ -52,45 +52,37 @@ app.post("/api/submit", async (req, res) => {
       return res.status(400).json({ error: "Boolean search string and location are required." });
     }
 
-    // n8n's Form Trigger webhook always expects multipart/form-data — it's
-    // built to support file-upload fields, so its parser rejects urlencoded
-    // bodies outright (that produced a hard "could not be started" error).
+    // n8n's Form Trigger does NOT use the field's real name (booleanSearchString,
+    // locationRegion, etc.) as the multipart field name — it uses positional
+    // keys matching the field's order in the form definition: field-0, field-1,
+    // ... This was confirmed by capturing the real form page's own submit
+    // request via browser devtools. This ordering must match the "Sourcing
+    // Request Form" node's formFields.values array exactly.
+    const FIELD_ORDER = [
+      "booleanSearchString", // field-0
+      "locationRegion",      // field-1
+      "roleContext",         // field-2
+      "roleKeywords",        // field-3
+      "skillsKeywords",      // field-4
+      "minYearsExperience",  // field-5
+      "seniorityLevel",      // field-6
+      "networkDistance",     // field-7
+      "spotlights",          // field-8
+      "recruitCrmJob"        // field-9
+    ];
+
     const form = new FormData();
-    for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined && value !== null && value !== "") {
-        form.append(key, String(value));
-      }
-    }
+    FIELD_ORDER.forEach((key, i) => {
+      const value = fields[key];
+      form.append(`field-${i}`, value !== undefined && value !== null ? String(value) : "");
+    });
 
     // TEMP DEBUG: log exactly what's being sent to n8n. Check this in your
-    // Render service logs after a test submit — if the fields listed here
-    // are populated, the bug is on n8n's parsing side; if they're empty,
-    // the bug is upstream (the browser -> /api/submit call).
-    console.log("[submit] forwarding fields to n8n:", Object.fromEntries(form.entries()));
+    // Render service logs after a test submit.
+    console.log("[submit] forwarding positional fields to n8n:", Object.fromEntries(form.entries()));
 
     const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
-
-    // n8n's Form Trigger may tie a submission to a specific page render via
-    // a session cookie (the same way a real browser visiting the form page
-    // first, then submitting, would work). We'd been POSTing cold with no
-    // prior GET, which could explain why the webhook accepts the request
-    // and starts an execution, but can't correlate the fields — hence nulls.
-    // Fetch the page first and carry forward any cookies it sets.
-    let cookieHeader = "";
-    try {
-      const pageRes = await fetch(webhookUrl, { method: "GET" });
-      const setCookie = pageRes.headers.get("set-cookie");
-      if (setCookie) cookieHeader = setCookie.split(",").map((c) => c.split(";")[0]).join("; ");
-      console.log("[submit] GET form page status:", pageRes.status, "cookie captured:", !!cookieHeader);
-    } catch (getErr) {
-      console.log("[submit] GET form page failed (continuing anyway):", getErr.message);
-    }
-
-    const submitRes = await fetch(webhookUrl, {
-      method: "POST",
-      headers: cookieHeader ? { Cookie: cookieHeader } : undefined,
-      body: form
-    });
+    const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!submitRes.ok) {
       const text = await submitRes.text().catch(() => "");
       return res.status(502).json({
@@ -138,7 +130,7 @@ app.post("/api/submit", async (req, res) => {
         if (formJson && !formJson.booleanSearchString) {
           return res.status(502).json({
             error:
-              "The workflow started, but n8n received an empty submission (fields came through as null). This usually means the form webhook path or encoding is wrong — check N8N_FORM_WEBHOOK_ID and the webhook URL pattern in the README.",
+              "The workflow started, but n8n received an empty submission (fields came through as null). If you've edited the form fields in n8n since this was written, the FIELD_ORDER array in server.js needs to match the new field order exactly.",
             executionId
           });
         }
