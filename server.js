@@ -190,14 +190,22 @@ async function fetchSheetRows(sheetName) {
 app.get("/api/sheet-overview", async (req, res) => {
   try {
     const [requests, candidates] = await Promise.all([
-      fetchSheetRows(SEARCH_REQUESTS_TAB),
+      fetchSheetRows(SEARCH_REQUESTS_TAB).catch(() => []), // best-effort only, see below
       fetchSheetRows(CANDIDATES_TAB)
     ]);
 
+    // Build history straight from the Candidates tab, grouped by the unique
+    // search keyword strings actually used. This is the reliable source —
+    // the Search Requests tab was found to silently return nothing (wrong
+    // headers/tab name/never written), which made totals populate but the
+    // history list stay empty. Candidates data alone is enough to answer
+    // "what searches have we run and how many candidates did each pool."
     const bySearch = {};
     for (const c of candidates) {
       const key = c["Search Keywords"] || "(unknown search)";
-      if (!bySearch[key]) bySearch[key] = { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null };
+      if (!bySearch[key]) {
+        bySearch[key] = { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null, sampleLocation: "" };
+      }
       const bucket = bySearch[key];
       bucket.count += 1;
       const score = parseFloat(c["Fit Score"]);
@@ -210,30 +218,37 @@ app.get("/api/sheet-overview", async (req, res) => {
       if (sourcedAt && (!bucket.lastSourced || sourcedAt > bucket.lastSourced)) bucket.lastSourced = sourcedAt;
     }
 
-    // Dedupe search requests by boolean string, keeping the most recent
-    // submission's metadata but the aggregated candidate stats.
-    const byString = new Map();
+    // Best-effort enrichment: if the Search Requests tab does have usable
+    // rows, borrow the original target location/role context per search
+    // string. If it doesn't, history still works fine without this.
+    const requestMeta = new Map();
     for (const r of requests) {
       const key = r["Boolean Search String"];
       if (!key) continue;
-      const existing = byString.get(key);
-      if (existing && new Date(existing.submittedAt) >= new Date(r["Submitted At"] || 0)) continue;
-      const stats = bySearch[key] || { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null };
-      byString.set(key, {
-        searchString: key,
+      const existing = requestMeta.get(key);
+      if (existing && new Date(existing.submittedAt || 0) >= new Date(r["Submitted At"] || 0)) continue;
+      requestMeta.set(key, {
         location: r["Location/Region"] || "",
         roleContext: r["Role Context"] || "",
-        submittedAt: r["Submitted At"] || null,
-        candidatesPooled: stats.count,
-        qualifiedCount: stats.qualified,
-        avgFitScore: stats.scoreCount ? Math.round(stats.scoreSum / stats.scoreCount) : null,
-        lastSourcedAt: stats.lastSourced
+        submittedAt: r["Submitted At"] || null
       });
     }
 
-    const history = Array.from(byString.values()).sort(
-      (a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
-    );
+    const history = Object.entries(bySearch)
+      .map(([searchString, stats]) => {
+        const meta = requestMeta.get(searchString) || {};
+        return {
+          searchString,
+          location: meta.location || "",
+          roleContext: meta.roleContext || "",
+          submittedAt: meta.submittedAt || stats.lastSourced,
+          candidatesPooled: stats.count,
+          qualifiedCount: stats.qualified,
+          avgFitScore: stats.scoreCount ? Math.round(stats.scoreSum / stats.scoreCount) : null,
+          lastSourcedAt: stats.lastSourced
+        };
+      })
+      .sort((a, b) => new Date(b.lastSourcedAt || 0) - new Date(a.lastSourcedAt || 0));
 
     const totals = {
       totalSearches: history.length,
