@@ -402,6 +402,11 @@
     padding: 1px 6px; border-radius: 9px; background: rgba(43,110,99,0.1);
   }
   .history-row .hr-qualified{ color: var(--amber); }
+  .history-row .hr-reuse{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; text-transform: uppercase;
+    color: var(--teal-deep); letter-spacing: 0.04em; cursor: pointer;
+  }
+  .history-row .hr-reuse:hover{ text-decoration: underline; }
   .history-refresh{
     width:100%; padding: 9px; margin: 0;
     background: transparent; border: none; border-top: 1px dashed var(--rule);
@@ -606,22 +611,7 @@
     return String(str).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
   }
 
-  function renderResults(candidates, summary){
-    const wrap = document.createElement("div");
-
-    if(summary){
-      const s = document.createElement("div");
-      s.className = "summary";
-      s.innerHTML = `
-        <span class="count">${summary.count ?? "—"}</span>
-        <span class="label">candidate${(summary.count === 1) ? "" : "s"} filed to RecruitCRM under <span class="job">${escapeHtml(summary.jobName || "—")}</span></span>
-      `;
-      wrap.appendChild(s);
-    }
-
-    const cardsWrap = document.createElement("div");
-    cardsWrap.className = "cards";
-
+  function buildCandidateCards(cardsWrap, candidates){
     if(candidates && candidates.length){
       candidates.forEach((c, idx) => {
         const score = c.fit_score;
@@ -633,7 +623,7 @@
         el.innerHTML = `
           <div class="cc-top">
             <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
-            <div class="cc-score">${score !== undefined && score !== null ? score : "—"}</div>
+            <div class="cc-score">${score !== undefined && score !== null && score !== "" ? score : "—"}</div>
           </div>
           <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
           <div class="cc-loc">${escapeHtml(c.location || "")}</div>
@@ -675,10 +665,50 @@
     } else {
       const none = document.createElement("div");
       none.style.cssText = "padding:24px; color:var(--ink-soft); font-size:12.5px;";
-      none.textContent = "Run finished, but candidate detail wasn't available. Check the Candidates sheet directly, or view the raw response above.";
+      none.textContent = "No candidate detail available here. Check the sheet directly, or view the raw response above.";
       cardsWrap.appendChild(none);
     }
+  }
 
+  function renderResults(candidates, summary){
+    const wrap = document.createElement("div");
+
+    if(summary){
+      const s = document.createElement("div");
+      s.className = "summary";
+      s.innerHTML = `
+        <span class="count">${summary.count ?? "—"}</span>
+        <span class="label">candidate${(summary.count === 1) ? "" : "s"} filed to RecruitCRM under <span class="job">${escapeHtml(summary.jobName || "—")}</span></span>
+      `;
+      wrap.appendChild(s);
+    }
+
+    const cardsWrap = document.createElement("div");
+    cardsWrap.className = "cards";
+    buildCandidateCards(cardsWrap, candidates);
+    wrap.appendChild(cardsWrap);
+    board.appendChild(wrap);
+  }
+
+  // Shows candidates already pooled for a past search, pulled from the
+  // sheet-overview payload — no workflow run, just browsing history.
+  function renderHistoryCandidates(item){
+    board.innerHTML = "";
+    const wrap = document.createElement("div");
+
+    const s = document.createElement("div");
+    s.className = "summary";
+    s.innerHTML = `
+      <span class="count">${item.candidatesPooled}</span>
+      <span class="label">candidates pooled for <span class="job">${escapeHtml(item.searchString)}</span>
+        — ${item.qualifiedCount} qualified${item.avgFitScore !== null && item.avgFitScore !== undefined ? `, avg fit ${item.avgFitScore}` : ""}
+      </span>
+    `;
+    wrap.appendChild(s);
+
+    const cardsWrap = document.createElement("div");
+    cardsWrap.className = "cards";
+    buildCandidateCards(cardsWrap, item.candidates || []);
     wrap.appendChild(cardsWrap);
     board.appendChild(wrap);
   }
@@ -802,14 +832,22 @@
             ${item.qualifiedCount ? ` <span class="hr-qualified">${item.qualifiedCount} qualified</span>` : ""}
           </span>
         </div>
-        <div class="hr-meta"><span>${timeAgo(item.submittedAt)}</span>${item.avgFitScore !== null ? `<span>avg fit ${item.avgFitScore}</span>` : "<span></span>"}</div>
+        <div class="hr-meta">
+          <span>${timeAgo(item.submittedAt)}</span>
+          <span class="hr-reuse" data-reuse="1">Reuse ↺</span>
+        </div>
       `;
-      row.addEventListener("click", () => {
-        $("booleanSearchString").value = item.searchString || "";
-        $("locationRegion").value = item.location || "";
-        $("roleContext").value = item.roleContext || "";
-        $("booleanSearchString").scrollIntoView({ behavior: "smooth", block: "center" });
-        formError.style.display = "none";
+      row.addEventListener("click", (e) => {
+        if(e.target.closest("[data-reuse]")){
+          $("booleanSearchString").value = item.searchString || "";
+          $("locationRegion").value = item.location || "";
+          $("roleContext").value = item.roleContext || "";
+          $("booleanSearchString").scrollIntoView({ behavior: "smooth", block: "center" });
+          formError.style.display = "none";
+          e.stopPropagation();
+          return;
+        }
+        renderHistoryCandidates(item);
       });
       historyList.appendChild(row);
     });
