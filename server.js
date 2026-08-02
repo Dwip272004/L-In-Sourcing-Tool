@@ -26,6 +26,12 @@ function n8nHeaders() {
   return { "X-N8N-API-KEY": N8N_API_KEY, accept: "application/json" };
 }
 
+// TEMP DEBUG endpoint: confirms whether the browser's fetch to our own
+// server is arriving with complete field data.
+app.post("/api/debug-echo", (req, res) => {
+  res.json({ receivedBody: req.body });
+});
+
 /**
  * Trigger the workflow by posting to its production Form Trigger webhook
  * (this is the same URL the public form page itself submits to — no n8n
@@ -46,23 +52,24 @@ app.post("/api/submit", async (req, res) => {
       return res.status(400).json({ error: "Boolean search string and location are required." });
     }
 
-    // n8n's Form Trigger parses submissions as application/x-www-form-urlencoded
-    // when the form has no file-upload fields (this one doesn't) — the same
-    // encoding a plain HTML <form> uses by default. Using multipart here
-    // previously resulted in every field arriving as null on the n8n side.
-    const form = new URLSearchParams();
+    // n8n's Form Trigger webhook always expects multipart/form-data — it's
+    // built to support file-upload fields, so its parser rejects urlencoded
+    // bodies outright (that produced a hard "could not be started" error).
+    const form = new FormData();
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined && value !== null && value !== "") {
         form.append(key, String(value));
       }
     }
 
+    // TEMP DEBUG: log exactly what's being sent to n8n. Check this in your
+    // Render service logs after a test submit — if the fields listed here
+    // are populated, the bug is on n8n's parsing side; if they're empty,
+    // the bug is upstream (the browser -> /api/submit call).
+    console.log("[submit] forwarding fields to n8n:", Object.fromEntries(form.entries()));
+
     const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
-    const submitRes = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString()
-    });
+    const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!submitRes.ok) {
       const text = await submitRes.text().catch(() => "");
       return res.status(502).json({
