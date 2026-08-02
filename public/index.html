@@ -325,6 +325,25 @@
     text-transform: uppercase; color: var(--teal-deep);
   }
 
+  .cc-headline{ font-size: 11px; color: var(--ink-soft); margin-top: 2px; line-height:1.35; font-style: italic; }
+  .cc-badges{ display:flex; gap:5px; margin-top: 6px; flex-wrap: wrap; }
+  .cc-badge{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px;
+    padding: 1px 6px; border-radius: 8px; border: 1px solid var(--rule); color: var(--ink-soft);
+  }
+  .cc-badge.email-verified{ border-color: var(--teal); color: var(--teal-deep); }
+  .cc-badge.email-extrapolated{ border-color: var(--amber); color: var(--amber); }
+
+  .cc-tabs{ display:flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--rule); }
+  .cc-tab-btn{
+    font-family:'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+    background: none; border: none; padding: 4px 8px 6px; cursor: pointer;
+    color: var(--ink-soft); border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .cc-tab-btn.active{ color: var(--teal-deep); border-bottom-color: var(--teal); }
+  .cc-tabpanel{ font-size: 12px; margin-top: 8px; line-height:1.45; }
+  .cc-tabpanel[hidden]{ display:none; }
+
   /* ---------- History panel ---------- */
   .history{ position: sticky; top: 24px; }
   .history-head{
@@ -571,6 +590,11 @@
     box.textContent = JSON.stringify(obj, null, 2);
   }
 
+  function formatDistance(d){
+    const map = { DISTANCE_1: "1st °", DISTANCE_2: "2nd °", DISTANCE_3: "3rd+ °" };
+    return map[d] || d;
+  }
+
   function tierFor(score){
     if(score === null || score === undefined || isNaN(score)) return "tier-low";
     if(score > 75) return "tier-high";
@@ -599,12 +623,13 @@
     cardsWrap.className = "cards";
 
     if(candidates && candidates.length){
-      candidates.forEach(c => {
+      candidates.forEach((c, idx) => {
         const score = c.fit_score;
         const tier = tierFor(score);
         const el = document.createElement("div");
         el.className = "cc " + tier;
         const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
+        const cardId = "cc-" + idx + "-" + Date.now();
         el.innerHTML = `
           <div class="cc-top">
             <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
@@ -612,15 +637,40 @@
           </div>
           <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
           <div class="cc-loc">${escapeHtml(c.location || "")}</div>
-          ${c.ai_summary ? `<div class="cc-summary">${escapeHtml(c.ai_summary)}</div>` : ""}
-          ${tags.length ? `<div class="cc-tags">${tags.map(t=>`<span class="cc-tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+          ${c.headline ? `<div class="cc-headline">${escapeHtml(c.headline)}</div>` : ""}
+          <div class="cc-badges">
+            ${c.network_distance ? `<span class="cc-badge">${escapeHtml(formatDistance(c.network_distance))}</span>` : ""}
+            ${c.email_status ? `<span class="cc-badge ${c.email_status === "verified" ? "email-verified" : c.email_status === "extrapolated" ? "email-extrapolated" : ""}">${escapeHtml(c.email_status)}</span>` : ""}
+          </div>
+          <div class="cc-tabs">
+            <button class="cc-tab-btn active" data-card="${cardId}" data-tab="fit">Fit</button>
+            ${c.gaps ? `<button class="cc-tab-btn" data-card="${cardId}" data-tab="gaps">Gaps</button>` : ""}
+          </div>
+          <div class="cc-tabpanel" data-card="${cardId}" data-panel="fit">
+            ${c.ai_summary ? escapeHtml(c.ai_summary) : "<em>No summary available.</em>"}
+            ${tags.length ? `<div class="cc-tags">${tags.map(t=>`<span class="cc-tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+          </div>
+          ${c.gaps ? `<div class="cc-tabpanel" data-card="${cardId}" data-panel="gaps" hidden>${escapeHtml(c.gaps)}</div>` : ""}
           <div class="cc-foot">
-            ${c.public_profile_url ? `<a class="cc-link" href="${escapeHtml(c.public_profile_url)}" target="_blank" rel="noopener">View profile</a>` : "<span></span>"}
+            <span>
+              ${c.public_profile_url ? `<a class="cc-link" href="${escapeHtml(c.public_profile_url)}" target="_blank" rel="noopener">Profile</a>` : ""}
+              ${c.talent_profile_url ? ` · <a class="cc-link" href="${escapeHtml(c.talent_profile_url)}" target="_blank" rel="noopener">Recruiter</a>` : ""}
+            </span>
             ${c.email && c.email !== "Not found" ? `<span class="cc-email">${escapeHtml(c.email)}</span>` : ""}
           </div>
           ${(tier === "tier-high" || tier === "tier-mid") && score > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
         `;
         cardsWrap.appendChild(el);
+      });
+
+      // Simple tab toggling, delegated once per render.
+      cardsWrap.addEventListener("click", (e) => {
+        const btn = e.target.closest(".cc-tab-btn");
+        if(!btn) return;
+        const cardId = btn.dataset.card;
+        const tab = btn.dataset.tab;
+        cardsWrap.querySelectorAll(`.cc-tab-btn[data-card="${cardId}"]`).forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+        cardsWrap.querySelectorAll(`.cc-tabpanel[data-card="${cardId}"]`).forEach(p => { p.hidden = p.dataset.panel !== tab; });
       });
     } else {
       const none = document.createElement("div");
@@ -635,11 +685,11 @@
 
   async function runSearch(formData){
     renderLedgerShell();
-    ledgerLine("Search request received.", "ok");
+    ledgerLine("Request received", "ok");
 
     let executionId;
     try{
-      ledgerLine("Sending request to workflow engine…");
+      ledgerLine("Starting workflow…");
       const submitRes = await fetch("/api/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -657,14 +707,14 @@
         return;
       }
       executionId = submitJson.executionId;
-      ledgerLine(`Workflow started (execution ${executionId}).`, "ok");
+      ledgerLine(`Running (#${executionId})`, "ok");
     } catch(err){
       ledgerLine("Could not start the workflow: " + err.message, "err");
       setStatus("err", "Failed to start");
       return;
     }
 
-    ledgerLine("Searching LinkedIn via Unipile, scoring fit, enriching emails…");
+    ledgerLine("Searching LinkedIn, scoring fits…");
     let finalStatus = null;
     const maxAttempts = 90; // ~4.5 min at 3s
     for(let attempt = 0; attempt < maxAttempts; attempt++){
@@ -688,15 +738,15 @@
       return;
     }
 
-    ledgerLine("Candidates scored and written to the sheet.", "ok");
-    ledgerLine("Fetching results…");
+    ledgerLine("Scored & saved to sheet", "ok");
+    ledgerLine("Loading results…");
 
     try{
       const resultsRes = await fetch(`/api/results/${executionId}`);
       const resultsJson = await resultsRes.json();
       showRaw(resultsJson);
       if(!resultsRes.ok || resultsJson.error) throw new Error(resultsJson.error || "Results fetch failed.");
-      ledgerLine("Run complete.", "ok");
+      ledgerLine("Done", "ok");
       setStatus("done", "Complete");
       renderResults(resultsJson.candidates, resultsJson.summary);
       loadHistory();
