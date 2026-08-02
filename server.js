@@ -69,7 +69,28 @@ app.post("/api/submit", async (req, res) => {
     console.log("[submit] forwarding fields to n8n:", Object.fromEntries(form.entries()));
 
     const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
-    const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
+
+    // n8n's Form Trigger may tie a submission to a specific page render via
+    // a session cookie (the same way a real browser visiting the form page
+    // first, then submitting, would work). We'd been POSTing cold with no
+    // prior GET, which could explain why the webhook accepts the request
+    // and starts an execution, but can't correlate the fields — hence nulls.
+    // Fetch the page first and carry forward any cookies it sets.
+    let cookieHeader = "";
+    try {
+      const pageRes = await fetch(webhookUrl, { method: "GET" });
+      const setCookie = pageRes.headers.get("set-cookie");
+      if (setCookie) cookieHeader = setCookie.split(",").map((c) => c.split(";")[0]).join("; ");
+      console.log("[submit] GET form page status:", pageRes.status, "cookie captured:", !!cookieHeader);
+    } catch (getErr) {
+      console.log("[submit] GET form page failed (continuing anyway):", getErr.message);
+    }
+
+    const submitRes = await fetch(webhookUrl, {
+      method: "POST",
+      headers: cookieHeader ? { Cookie: cookieHeader } : undefined,
+      body: form
+    });
     if (!submitRes.ok) {
       const text = await submitRes.text().catch(() => "");
       return res.status(502).json({
