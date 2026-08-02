@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sourcing Desk</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --paper: #E7E3D8;
+    --paper-raised: #F1EEE4;
+    --ink: #23261F;
+    --ink-soft: #5B5A4D;
+    --rule: #C9C3AF;
+    --teal: #2B6E63;
+    --teal-deep: #1D4B43;
+    --amber: #B9822F;
+    --rust: #9C4A3A;
+    --card-shadow: 0 1px 0 rgba(35,38,31,0.06), 0 8px 20px -12px rgba(35,38,31,0.35);
+    --radius: 3px;
+  }
+
+  *{ box-sizing: border-box; }
+
+  body{
+    margin:0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before{
+    content:"";
+    position: fixed; inset:0;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(35,38,31,0.015) 0px, rgba(35,38,31,0.015) 1px, transparent 1px, transparent 3px);
+    pointer-events:none;
+    z-index:0;
+  }
+
+  .wrap{
+    position:relative;
+    z-index:1;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 40px 28px 80px;
+  }
+
+  header.masthead{
+    display:flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 34px;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--teal-deep);
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
+  h1.title{
+    font-family:'Roboto Slab', Georgia, serif;
+    font-weight: 700;
+    font-size: clamp(28px, 4vw, 40px);
+    margin:0;
+    letter-spacing: -0.01em;
+  }
+  .masthead-meta{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+    text-align: right;
+    line-height: 1.6;
+  }
+  .masthead-meta span{ color: var(--ink); font-weight: 600; }
+
+  .desk{
+    display:grid;
+    grid-template-columns: 380px 1fr;
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 860px){
+    .desk{ grid-template-columns: 1fr; }
+  }
+
+  .card{
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+  }
+
+  .slip{
+    padding: 22px 22px 24px;
+    position: sticky;
+    top: 24px;
+  }
+  .slip-head{
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    border-bottom: 1px dashed var(--rule);
+    padding-bottom: 12px;
+  }
+  .slip-head h2{
+    font-family:'Roboto Slab', Georgia, serif;
+    font-size: 16px;
+    margin:0;
+    font-weight:600;
+  }
+  .slip-num{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-soft);
+  }
+
+  .field{ margin-bottom: 14px; }
+  .field label{
+    display:block;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-bottom: 5px;
+    color: var(--ink);
+  }
+  .field .hint{
+    display:block;
+    font-size: 10.5px;
+    color: var(--ink-soft);
+    font-weight: 400;
+    margin-top: 3px;
+    font-style: italic;
+  }
+  .field input[type=text],
+  .field input[type=number],
+  .field textarea,
+  .field select{
+    width:100%;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    padding: 8px 10px;
+    background: #FBFAF6;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    color: var(--ink);
+    resize: vertical;
+  }
+  .field textarea{ min-height: 56px; }
+  .field input:focus, .field textarea:focus, .field select:focus{
+    outline: none;
+    border-color: var(--teal);
+    box-shadow: 0 0 0 2px rgba(43,110,99,0.18);
+  }
+  .row-2{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .req-mark{ color: var(--rust); margin-left:3px; }
+
+  button.submit{
+    width:100%;
+    margin-top: 10px;
+    padding: 12px 16px;
+    background: var(--ink);
+    color: var(--paper-raised);
+    border:none;
+    border-radius: 2px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.submit:hover:not(:disabled){ background: var(--teal-deep); }
+  button.submit:disabled{ opacity: 0.5; cursor: not-allowed; }
+
+  .form-error{
+    font-size: 11.5px;
+    color: var(--rust);
+    margin-top: 8px;
+    font-family:'IBM Plex Mono', monospace;
+    display:none;
+  }
+
+  .board{ min-height: 420px; }
+
+  .empty-state{
+    padding: 70px 30px;
+    text-align:center;
+    color: var(--ink-soft);
+  }
+  .empty-state .glyph{
+    font-family:'Roboto Slab', serif;
+    font-size: 34px;
+    color: var(--rule);
+    margin-bottom: 10px;
+  }
+  .empty-state p{ font-size: 13px; max-width: 340px; margin: 6px auto 0; line-height:1.5; }
+
+  .ledger{
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .ledger-title{
+    display:flex; align-items:center; gap:10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 12px;
+  }
+  .dot{
+    width:7px; height:7px; border-radius:50%;
+    background: var(--rule);
+    flex: none;
+  }
+  .dot.live{ background: var(--teal); animation: pulse 1.2s ease-in-out infinite; }
+  .dot.done{ background: var(--teal); }
+  .dot.err{ background: var(--rust); }
+  @keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.35; } }
+
+  .ledger-lines{ font-family:'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.9; }
+  .ledger-line{
+    display:flex; gap:10px; opacity:0; transform: translateY(3px);
+    animation: rise 0.35s ease forwards;
+  }
+  .ledger-line .t{ color: var(--ink-soft); flex:none; }
+  .ledger-line .m{ color: var(--ink); }
+  .ledger-line.err .m{ color: var(--rust); font-weight:600; }
+  .ledger-line.ok .m::after{ content: " ✓"; color: var(--teal); }
+  @keyframes rise{ to{ opacity:1; transform: translateY(0); } }
+
+  .raw-toggle{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-soft);
+    background:none; border:none; text-decoration: underline;
+    cursor:pointer; padding: 0; margin-top: 10px;
+  }
+  pre.raw{
+    max-height: 220px; overflow:auto;
+    background:#1F221C; color:#D7D2C2;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    padding: 10px; border-radius:2px; margin-top:8px;
+    display:none;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  .summary{
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--rule);
+    display:flex; align-items:baseline; gap: 14px; flex-wrap:wrap;
+  }
+  .summary .count{
+    font-family:'Roboto Slab', serif;
+    font-weight:700; font-size: 30px; color: var(--teal-deep);
+    line-height:1;
+  }
+  .summary .label{ font-size: 12.5px; color: var(--ink-soft); }
+  .summary .job{ font-weight:600; color: var(--ink); }
+
+  .cards{
+    padding: 18px 22px 22px;
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+  }
+  .cc{
+    background:#FBFAF6;
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--rule);
+    border-radius: 2px;
+    padding: 13px 14px 14px;
+  }
+  .cc.tier-high{ border-left-color: var(--teal); }
+  .cc.tier-mid{ border-left-color: var(--amber); }
+  .cc.tier-low{ border-left-color: var(--rule); }
+
+  .cc-top{ display:flex; justify-content: space-between; align-items:flex-start; gap:8px; }
+  .cc-name{ font-family:'Roboto Slab', serif; font-weight:600; font-size: 14.5px; }
+  .cc-score{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px; font-weight:600;
+    padding: 2px 7px; border-radius: 10px;
+    background: rgba(43,110,99,0.12); color: var(--teal-deep);
+    flex:none;
+  }
+  .cc.tier-mid .cc-score{ background: rgba(185,130,47,0.14); color: var(--amber); }
+  .cc.tier-low .cc-score{ background: rgba(91,90,77,0.12); color: var(--ink-soft); }
+
+  .cc-role{ font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
+  .cc-loc{ font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+  .cc-summary{ font-size: 12px; margin-top: 8px; line-height:1.45; }
+  .cc-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top: 9px; }
+  .cc-tag{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    color: var(--ink-soft);
+  }
+  .cc-foot{ display:flex; justify-content: space-between; align-items:center; margin-top: 10px; }
+  .cc-link{ font-size: 11px; color: var(--teal-deep); text-decoration:none; }
+  .cc-link:hover{ text-decoration: underline; }
+  .cc-email{ font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); }
+  .cc-crm{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing:0.05em;
+    text-transform: uppercase; color: var(--teal-deep);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Talent Sourcing / Internal Tool</p>
+      <h1 class="title">Sourcing Desk</h1>
+    </div>
+    <div class="masthead-meta">
+      Workflow: <span>LinkedIn Sourcing Tool</span><br/>
+      Runs via Unipile · OpenRouter · Apollo · RecruitCRM
+    </div>
+  </header>
+
+  <div class="desk">
+
+    <section class="card slip">
+      <div class="slip-head">
+        <h2>Search request</h2>
+        <span class="slip-num" id="slipNum">No. ——</span>
+      </div>
+
+      <form id="searchForm">
+        <div class="field">
+          <label>Boolean search string<span class="req-mark">*</span></label>
+          <textarea id="booleanSearchString" required placeholder='("Java Developer" OR "Backend Engineer") AND (AWS OR "Amazon Web Services") NOT Intern'></textarea>
+        </div>
+
+        <div class="field">
+          <label>Location / region<span class="req-mark">*</span></label>
+          <input type="text" id="locationRegion" required placeholder="e.g. United States" />
+        </div>
+
+        <div class="field">
+          <label>Role context <span class="hint">optional — sharpens AI fit scoring</span></label>
+          <textarea id="roleContext" placeholder="Paste extra JD context"></textarea>
+        </div>
+
+        <div class="row-2">
+          <div class="field">
+            <label>Role keywords <span class="hint">optional</span></label>
+            <input type="text" id="roleKeywords" placeholder="Backend Engineer" />
+          </div>
+          <div class="field">
+            <label>Skills <span class="hint">comma-separated</span></label>
+            <input type="text" id="skillsKeywords" placeholder="AWS, Python, K8s" />
+          </div>
+        </div>
+
+        <div class="row-2">
+          <div class="field">
+            <label>Seniority <span class="hint">optional</span></label>
+            <select id="seniorityLevel">
+              <option value="">—</option>
+              <option>Owner</option><option>Partner</option><option>CXO</option>
+              <option>VP</option><option>Director</option><option>Manager</option>
+              <option selected>Senior</option><option>Entry</option><option>Training</option><option>Unpaid</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Network distance <span class="hint">optional</span></label>
+            <select id="networkDistance">
+              <option value="">—</option>
+              <option>1st Degree</option><option>2nd Degree</option>
+              <option>3rd+ Degree</option><option>Group Members</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Candidate spotlight <span class="hint">optional</span></label>
+          <select id="spotlights">
+            <option value="">—</option>
+            <option selected>Open to Work</option><option>Active Talent</option>
+            <option>Rediscovered Candidates</option><option>Internal Candidates</option>
+            <option>Interested in Your Company</option><option>Have Company Connections</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Min. years experience <span class="hint">logged only — not applied as a filter on this Recruiter seat</span></label>
+          <input type="number" id="minYearsExperience" min="0" placeholder="e.g. 3" />
+        </div>
+
+        <div class="field">
+          <label>RecruitCRM job <span class="hint">leave blank to skip pushing to RecruitCRM</span></label>
+          <input type="text" id="recruitCrmJob" placeholder="Senior Backend Engineer" />
+        </div>
+
+        <button type="submit" class="submit" id="submitBtn">Run search</button>
+        <div class="form-error" id="formError">Fill in the boolean search string and location.</div>
+      </form>
+    </section>
+
+    <section class="card board" id="board">
+      <div class="empty-state" id="emptyState">
+        <div class="glyph">§</div>
+        <p>No search running. Submit a request on the left — this desk will show each step live, then lay out every candidate as it's scored and filed.</p>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const board = $("board");
+  const form = $("searchForm");
+  const submitBtn = $("submitBtn");
+  const formError = $("formError");
+  const slipNum = $("slipNum");
+
+  let runCount = 0;
+  let linesEl, dotEl;
+
+  function renderLedgerShell(){
+    runCount += 1;
+    slipNum.textContent = "No. " + String(runCount).padStart(3, "0");
+    board.innerHTML = `
+      <div class="ledger">
+        <div class="ledger-title"><span class="dot live" id="statusDot"></span><span id="statusLabel">Processing</span></div>
+        <div class="ledger-lines" id="ledgerLines"></div>
+        <button class="raw-toggle" id="rawToggle" style="display:none;">view raw response</button>
+        <pre class="raw" id="rawBox"></pre>
+      </div>
+    `;
+    linesEl = $("ledgerLines");
+    dotEl = $("statusDot");
+    $("rawToggle").addEventListener("click", () => {
+      const box = $("rawBox");
+      box.style.display = box.style.display === "block" ? "none" : "block";
+    });
+  }
+
+  function ledgerLine(text, state){
+    const line = document.createElement("div");
+    line.className = "ledger-line " + (state || "");
+    const now = new Date();
+    const t = now.toTimeString().slice(0,8);
+    line.innerHTML = `<span class="t">${t}</span><span class="m">${text}</span>`;
+    linesEl.appendChild(line);
+    return line;
+  }
+
+  function setStatus(state, label){
+    dotEl.className = "dot " + state;
+    $("statusLabel").textContent = label;
+  }
+
+  function showRaw(obj){
+    const btn = $("rawToggle");
+    const box = $("rawBox");
+    btn.style.display = "inline-block";
+    box.textContent = JSON.stringify(obj, null, 2);
+  }
+
+  function tierFor(score){
+    if(score === null || score === undefined || isNaN(score)) return "tier-low";
+    if(score > 75) return "tier-high";
+    if(score > 60) return "tier-mid";
+    return "tier-low";
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+  }
+
+  function renderResults(candidates, summary){
+    const wrap = document.createElement("div");
+
+    if(summary){
+      const s = document.createElement("div");
+      s.className = "summary";
+      s.innerHTML = `
+        <span class="count">${summary.count ?? "—"}</span>
+        <span class="label">candidate${(summary.count === 1) ? "" : "s"} filed to RecruitCRM under <span class="job">${escapeHtml(summary.jobName || "—")}</span></span>
+      `;
+      wrap.appendChild(s);
+    }
+
+    const cardsWrap = document.createElement("div");
+    cardsWrap.className = "cards";
+
+    if(candidates && candidates.length){
+      candidates.forEach(c => {
+        const score = c.fit_score;
+        const tier = tierFor(score);
+        const el = document.createElement("div");
+        el.className = "cc " + tier;
+        const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
+        el.innerHTML = `
+          <div class="cc-top">
+            <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
+            <div class="cc-score">${score !== undefined && score !== null ? score : "—"}</div>
+          </div>
+          <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
+          <div class="cc-loc">${escapeHtml(c.location || "")}</div>
+          ${c.ai_summary ? `<div class="cc-summary">${escapeHtml(c.ai_summary)}</div>` : ""}
+          ${tags.length ? `<div class="cc-tags">${tags.map(t=>`<span class="cc-tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+          <div class="cc-foot">
+            ${c.public_profile_url ? `<a class="cc-link" href="${escapeHtml(c.public_profile_url)}" target="_blank" rel="noopener">View profile</a>` : "<span></span>"}
+            ${c.email && c.email !== "Not found" ? `<span class="cc-email">${escapeHtml(c.email)}</span>` : ""}
+          </div>
+          ${(tier === "tier-high" || tier === "tier-mid") && score > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
+        `;
+        cardsWrap.appendChild(el);
+      });
+    } else {
+      const none = document.createElement("div");
+      none.style.cssText = "padding:24px; color:var(--ink-soft); font-size:12.5px;";
+      none.textContent = "Run finished, but candidate detail wasn't available. Check the Candidates sheet directly, or view the raw response above.";
+      cardsWrap.appendChild(none);
+    }
+
+    wrap.appendChild(cardsWrap);
+    board.appendChild(wrap);
+  }
+
+  async function runSearch(formData){
+    renderLedgerShell();
+    ledgerLine("Search request received.", "ok");
+
+    let executionId;
+    try{
+      ledgerLine("Sending request to workflow engine…");
+      const submitRes = await fetch("/api/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData)
+      });
+      const submitJson = await submitRes.json();
+      showRaw(submitJson);
+      if(!submitRes.ok || submitJson.error) throw new Error(submitJson.error || "Submit failed.");
+      if(submitJson.warning){
+        ledgerLine(submitJson.warning, "err");
+        setStatus("err", "Unconfirmed");
+        return;
+      }
+      executionId = submitJson.executionId;
+      ledgerLine(`Workflow started (execution ${executionId}).`, "ok");
+    } catch(err){
+      ledgerLine("Could not start the workflow: " + err.message, "err");
+      setStatus("err", "Failed to start");
+      return;
+    }
+
+    ledgerLine("Searching LinkedIn via Unipile, scoring fit, enriching emails…");
+    let finalStatus = null;
+    const maxAttempts = 90; // ~4.5 min at 3s
+    for(let attempt = 0; attempt < maxAttempts; attempt++){
+      await new Promise(r => setTimeout(r, 3000));
+      try{
+        const statusRes = await fetch(`/api/status/${executionId}`);
+        const statusJson = await statusRes.json();
+        if(statusJson.status === "success" || statusJson.finished === true){ finalStatus = "success"; break; }
+        if(statusJson.status === "error" || statusJson.status === "crashed"){ finalStatus = "error"; break; }
+      } catch(err){ /* transient, keep polling */ }
+    }
+
+    if(finalStatus === "error"){
+      ledgerLine("Workflow reported an error.", "err");
+      setStatus("err", "Failed");
+      return;
+    }
+    if(finalStatus !== "success"){
+      ledgerLine("Still running after several minutes — check RecruitCRM / the Candidates sheet directly.", "err");
+      setStatus("err", "Timed out watching status");
+      return;
+    }
+
+    ledgerLine("Candidates scored and written to the sheet.", "ok");
+    ledgerLine("Fetching results…");
+
+    try{
+      const resultsRes = await fetch(`/api/results/${executionId}`);
+      const resultsJson = await resultsRes.json();
+      showRaw(resultsJson);
+      if(!resultsRes.ok || resultsJson.error) throw new Error(resultsJson.error || "Results fetch failed.");
+      ledgerLine("Run complete.", "ok");
+      setStatus("done", "Complete");
+      renderResults(resultsJson.candidates, resultsJson.summary);
+    } catch(err){
+      ledgerLine("Run finished, but results couldn't be loaded: " + err.message, "err");
+      setStatus("err", "Results unavailable");
+    }
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const booleanSearchString = $("booleanSearchString").value.trim();
+    const locationRegion = $("locationRegion").value.trim();
+    if(!booleanSearchString || !locationRegion){
+      formError.style.display = "block";
+      return;
+    }
+    formError.style.display = "none";
+
+    const formData = {
+      booleanSearchString,
+      locationRegion,
+      roleContext: $("roleContext").value.trim(),
+      roleKeywords: $("roleKeywords").value.trim(),
+      skillsKeywords: $("skillsKeywords").value.trim(),
+      minYearsExperience: $("minYearsExperience").value,
+      seniorityLevel: $("seniorityLevel").value,
+      networkDistance: $("networkDistance").value,
+      spotlights: $("spotlights").value,
+      recruitCrmJob: $("recruitCrmJob").value.trim(),
+      submittedAt: new Date().toISOString()
+    };
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Running…";
+    runSearch(formData).finally(() => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Run search";
+    });
+  });
+})();
+</script>
+</body>
+</html>
