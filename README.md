@@ -38,6 +38,9 @@ The API key never reaches the browser. The frontend only ever calls your own
 | `N8N_API_KEY` | the key from step 2 above |
 | `N8N_FORM_WEBHOOK_ID` | `696576aa-5fbe-4b76-849d-fd81f5f0cb2a` (default, already set) |
 | `N8N_WORKFLOW_ID` | `jo9Q690CzrUwUZPv` (default, already set) |
+| `SHEET_ID` | `1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w` (default, already set) |
+| `SEARCH_REQUESTS_TAB` | `Search Requests` (default, already set) |
+| `CANDIDATES_TAB` | `Candidates` (default, already set) |
 
 ## Deploying on Render
 
@@ -47,6 +50,18 @@ The API key never reaches the browser. The frontend only ever calls your own
 4. Add the environment variables above under the service's Environment tab.
 5. Deploy. Render gives you a URL — share that with your team; it serves the
    dashboard directly.
+
+## Sourcing history panel
+
+A third panel reads the same [Google Sheet](https://docs.google.com/spreadsheets/d/1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w/edit?usp=sharing) the workflow writes to — `Search Requests` and `Candidates` tabs — and shows:
+
+- Total searches run, total candidates pooled, total qualified (fit score > 60)
+- Every past boolean search string, with how many candidates it pooled and how many qualified
+- Click any past search to reuse its search string, location, and role context in the form
+
+**Requirement**: the sheet must stay shared as **"Anyone with the link can view"** (Share → General access). The server reads it via Google's public `gviz` endpoint — no API key or service account needed, but it only works while link-sharing is on. If you lock the sheet down later, this panel will need to switch to the official Sheets API with a service account instead.
+
+If your tab names ever change from `Search Requests` / `Candidates`, set `SEARCH_REQUESTS_TAB` / `CANDIDATES_TAB` env vars to match.
 
 ## How it works
 

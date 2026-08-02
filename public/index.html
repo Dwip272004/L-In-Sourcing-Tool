@@ -84,12 +84,17 @@
 
   .desk{
     display:grid;
-    grid-template-columns: 380px 1fr;
-    gap: 28px;
+    grid-template-columns: 360px 1fr 340px;
+    gap: 24px;
     align-items: start;
+  }
+  @media (max-width: 1180px){
+    .desk{ grid-template-columns: 360px 1fr; }
+    .history{ grid-column: 1 / -1; }
   }
   @media (max-width: 860px){
     .desk{ grid-template-columns: 1fr; }
+    .history{ grid-column: auto; }
   }
 
   .card{
@@ -319,6 +324,77 @@
     font-family:'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing:0.05em;
     text-transform: uppercase; color: var(--teal-deep);
   }
+
+  /* ---------- History panel ---------- */
+  .history{ position: sticky; top: 24px; }
+  .history-head{
+    padding: 18px 20px 14px;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .history-head h2{
+    font-family:'Roboto Slab', Georgia, serif;
+    font-size: 15px; margin: 0 0 4px; font-weight: 600;
+  }
+  .history-sub{ font-size: 11px; color: var(--ink-soft); }
+
+  .stats-strip{
+    display:grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .stat-cell{
+    background: var(--paper-raised);
+    padding: 12px 10px;
+    text-align:center;
+  }
+  .stat-num{
+    font-family:'Roboto Slab', serif; font-weight:700; font-size: 20px; color: var(--teal-deep);
+    line-height:1.1;
+  }
+  .stat-label{ font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing:0.05em; margin-top:3px; }
+
+  .history-list{ max-height: 620px; overflow-y: auto; }
+  .history-empty{ padding: 20px; font-size: 12px; color: var(--ink-soft); }
+  .history-row{
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--rule);
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .history-row:hover{ background: rgba(43,110,99,0.06); }
+  .history-row .hr-string{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .history-row .hr-meta{
+    display:flex; justify-content: space-between; align-items:center;
+    margin-top: 7px; font-size: 10.5px; color: var(--ink-soft);
+  }
+  .history-row .hr-loc{ font-style: italic; }
+  .history-row .hr-count{
+    font-family:'IBM Plex Mono', monospace; font-weight:600;
+    color: var(--teal-deep);
+    padding: 1px 6px; border-radius: 9px; background: rgba(43,110,99,0.1);
+  }
+  .history-row .hr-qualified{ color: var(--amber); }
+  .history-refresh{
+    width:100%; padding: 9px; margin: 0;
+    background: transparent; border: none; border-top: 1px dashed var(--rule);
+    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;
+  }
+  .history-refresh:hover{ color: var(--teal-deep); }
+  .sheet-link{
+    display:block; padding: 10px 18px; font-size: 10.5px;
+    color: var(--teal-deep); text-decoration:none; border-top: 1px dashed var(--rule);
+  }
+  .sheet-link:hover{ text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -420,6 +496,23 @@
         <div class="glyph">§</div>
         <p>No search running. Submit a request on the left — this desk will show each step live, then lay out every candidate as it's scored and filed.</p>
       </div>
+    </section>
+
+    <section class="card history">
+      <div class="history-head">
+        <h2>Sourcing history</h2>
+        <div class="history-sub">Pulled live from the Candidates sheet</div>
+      </div>
+      <div class="stats-strip" id="statsStrip">
+        <div class="stat-cell"><div class="stat-num">—</div><div class="stat-label">Searches</div></div>
+        <div class="stat-cell"><div class="stat-num">—</div><div class="stat-label">Candidates</div></div>
+        <div class="stat-cell"><div class="stat-num">—</div><div class="stat-label">Qualified</div></div>
+      </div>
+      <div class="history-list" id="historyList">
+        <div class="history-empty">Loading past searches…</div>
+      </div>
+      <button class="history-refresh" id="historyRefresh">Refresh</button>
+      <a class="sheet-link" href="https://docs.google.com/spreadsheets/d/1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w/edit?usp=sharing" target="_blank" rel="noopener">Open the full sheet →</a>
     </section>
 
   </div>
@@ -554,7 +647,10 @@
       });
       const submitJson = await submitRes.json();
       showRaw(submitJson);
-      if(!submitRes.ok || submitJson.error) throw new Error(submitJson.error || "Submit failed.");
+      if(!submitRes.ok || submitJson.error){
+        const idNote = submitJson.executionId ? ` (execution ${submitJson.executionId})` : "";
+        throw new Error((submitJson.error || "Submit failed.") + idNote);
+      }
       if(submitJson.warning){
         ledgerLine(submitJson.warning, "err");
         setStatus("err", "Unconfirmed");
@@ -603,11 +699,87 @@
       ledgerLine("Run complete.", "ok");
       setStatus("done", "Complete");
       renderResults(resultsJson.candidates, resultsJson.summary);
+      loadHistory();
     } catch(err){
       ledgerLine("Run finished, but results couldn't be loaded: " + err.message, "err");
       setStatus("err", "Results unavailable");
     }
   }
+
+  // ---------- History panel ----------
+  const statsStrip = $("statsStrip");
+  const historyList = $("historyList");
+
+  function escapeHtmlShort(str){ return escapeHtml(str); }
+
+  function timeAgo(iso){
+    if(!iso) return "";
+    const d = new Date(iso);
+    if(isNaN(d)) return "";
+    const diffMs = Date.now() - d.getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if(mins < 1) return "just now";
+    if(mins < 60) return mins + "m ago";
+    const hrs = Math.floor(mins / 60);
+    if(hrs < 24) return hrs + "h ago";
+    const days = Math.floor(hrs / 24);
+    if(days < 30) return days + "d ago";
+    return d.toLocaleDateString();
+  }
+
+  function renderStats(totals){
+    const cells = statsStrip.querySelectorAll(".stat-num");
+    cells[0].textContent = totals.totalSearches ?? "—";
+    cells[1].textContent = totals.totalCandidatesPooled ?? "—";
+    cells[2].textContent = totals.totalQualified ?? "—";
+  }
+
+  function renderHistory(history){
+    if(!history || !history.length){
+      historyList.innerHTML = '<div class="history-empty">No past searches found in the sheet yet.</div>';
+      return;
+    }
+    historyList.innerHTML = "";
+    history.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "history-row";
+      row.innerHTML = `
+        <div class="hr-string">${escapeHtmlShort(item.searchString)}</div>
+        <div class="hr-meta">
+          <span class="hr-loc">${escapeHtmlShort(item.location || "")}</span>
+          <span>
+            <span class="hr-count">${item.candidatesPooled} pooled</span>
+            ${item.qualifiedCount ? ` <span class="hr-qualified">${item.qualifiedCount} qualified</span>` : ""}
+          </span>
+        </div>
+        <div class="hr-meta"><span>${timeAgo(item.submittedAt)}</span>${item.avgFitScore !== null ? `<span>avg fit ${item.avgFitScore}</span>` : "<span></span>"}</div>
+      `;
+      row.addEventListener("click", () => {
+        $("booleanSearchString").value = item.searchString || "";
+        $("locationRegion").value = item.location || "";
+        $("roleContext").value = item.roleContext || "";
+        $("booleanSearchString").scrollIntoView({ behavior: "smooth", block: "center" });
+        formError.style.display = "none";
+      });
+      historyList.appendChild(row);
+    });
+  }
+
+  async function loadHistory(){
+    historyList.innerHTML = '<div class="history-empty">Loading past searches…</div>';
+    try{
+      const res = await fetch("/api/sheet-overview");
+      const data = await res.json();
+      if(!res.ok || data.error) throw new Error(data.error || "Failed to load sheet data.");
+      renderStats(data.totals || {});
+      renderHistory(data.history || []);
+    } catch(err){
+      historyList.innerHTML = `<div class="history-empty">Couldn't load sheet data: ${escapeHtmlShort(err.message)}</div>`;
+    }
+  }
+
+  $("historyRefresh").addEventListener("click", loadHistory);
+  loadHistory();
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();

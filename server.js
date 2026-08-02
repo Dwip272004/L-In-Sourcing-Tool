@@ -12,6 +12,9 @@ const {
   N8N_API_KEY,                                          // n8n Settings > API > create an API key
   N8N_FORM_WEBHOOK_ID = "696576aa-5fbe-4b76-849d-fd81f5f0cb2a", // "Sourcing Request Form" node's webhookId
   N8N_WORKFLOW_ID = "jo9Q690CzrUwUZPv",
+  SHEET_ID = "1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w", // the Candidates sourcing Google Sheet
+  SEARCH_REQUESTS_TAB = "Search Requests",
+  CANDIDATES_TAB = "Candidates",
   PORT = 3000
 } = process.env;
 
@@ -35,7 +38,19 @@ function n8nHeaders() {
 app.post("/api/submit", async (req, res) => {
   try {
     const fields = req.body || {};
-    const form = new FormData();
+
+    // Hard requirement check before we even talk to n8n — an empty submit
+    // here previously slipped through silently and produced a workflow
+    // error deep inside the LinkedIn search call instead of a clear message.
+    if (!fields.booleanSearchString || !fields.locationRegion) {
+      return res.status(400).json({ error: "Boolean search string and location are required." });
+    }
+
+    // n8n's Form Trigger parses submissions as application/x-www-form-urlencoded
+    // when the form has no file-upload fields (this one doesn't) — the same
+    // encoding a plain HTML <form> uses by default. Using multipart here
+    // previously resulted in every field arriving as null on the n8n side.
+    const form = new URLSearchParams();
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined && value !== null && value !== "") {
         form.append(key, String(value));
@@ -43,7 +58,11 @@ app.post("/api/submit", async (req, res) => {
     }
 
     const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
-    const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
+    const submitRes = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString()
+    });
     if (!submitRes.ok) {
       const text = await submitRes.text().catch(() => "");
       return res.status(502).json({
@@ -75,6 +94,32 @@ app.post("/api/submit", async (req, res) => {
           "Workflow triggered, but the execution couldn't be confirmed yet. Check the Candidates sheet or RecruitCRM directly."
       });
     }
+
+    // Sanity check: confirm the fields actually landed in n8n before we
+    // spend the next several minutes polling a run that's doomed to fail.
+    // Small delay so the "Sourcing Request Form" node has definitely run.
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      const checkUrl = `${N8N_BASE_URL}/api/v1/executions/${executionId}?includeData=true`;
+      const checkRes = await fetch(checkUrl, { headers: n8nHeaders() });
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        const runData = checkData?.data?.resultData?.runData || {};
+        const formRun = runData["Sourcing Request Form"];
+        const formJson = formRun?.[0]?.data?.main?.[0]?.[0]?.json;
+        if (formJson && !formJson.booleanSearchString) {
+          return res.status(502).json({
+            error:
+              "The workflow started, but n8n received an empty submission (fields came through as null). This usually means the form webhook path or encoding is wrong — check N8N_FORM_WEBHOOK_ID and the webhook URL pattern in the README.",
+            executionId
+          });
+        }
+      }
+    } catch (checkErr) {
+      // Non-fatal — if this check itself fails, fall through and let normal
+      // polling / error reporting handle it.
+    }
+
     res.json({ executionId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -88,6 +133,95 @@ app.get("/api/status/:id", async (req, res) => {
     if (!r.ok) return res.status(r.status).json({ error: `Status check failed (${r.status})` });
     const data = await r.json();
     res.json({ status: data.status, finished: data.finished });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Read a tab from the public Google Sheet via the gviz endpoint. This works
+ * without any credentials as long as the sheet is shared as "Anyone with
+ * the link can view" — the same mechanism Google uses for embedded charts.
+ * If the sheet is later locked down, this will need a service account and
+ * the official Sheets API instead.
+ */
+async function fetchSheetRows(sheetName) {
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Sheet fetch failed for "${sheetName}" (${r.status}). Is it shared as "Anyone with the link"?`);
+  const text = await r.text();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error(`Unexpected response reading "${sheetName}" tab.`);
+  const data = JSON.parse(text.slice(start, end + 1));
+  const cols = data.table.cols.map((c) => c.label || c.id);
+  return (data.table.rows || []).map((row) => {
+    const obj = {};
+    (row.c || []).forEach((cell, i) => {
+      obj[cols[i]] = cell ? (cell.f !== undefined && cell.f !== null ? cell.f : cell.v) : null;
+    });
+    return obj;
+  });
+}
+
+// Combines the Search Requests + Candidates tabs into a reusable search
+// history: each past boolean search string, how many candidates it pooled,
+// how many cleared the fit-score bar, and average fit score.
+app.get("/api/sheet-overview", async (req, res) => {
+  try {
+    const [requests, candidates] = await Promise.all([
+      fetchSheetRows(SEARCH_REQUESTS_TAB),
+      fetchSheetRows(CANDIDATES_TAB)
+    ]);
+
+    const bySearch = {};
+    for (const c of candidates) {
+      const key = c["Search Keywords"] || "(unknown search)";
+      if (!bySearch[key]) bySearch[key] = { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null };
+      const bucket = bySearch[key];
+      bucket.count += 1;
+      const score = parseFloat(c["Fit Score"]);
+      if (!isNaN(score)) {
+        bucket.scoreSum += score;
+        bucket.scoreCount += 1;
+        if (score > 60) bucket.qualified += 1;
+      }
+      const sourcedAt = c["Sourced At"];
+      if (sourcedAt && (!bucket.lastSourced || sourcedAt > bucket.lastSourced)) bucket.lastSourced = sourcedAt;
+    }
+
+    // Dedupe search requests by boolean string, keeping the most recent
+    // submission's metadata but the aggregated candidate stats.
+    const byString = new Map();
+    for (const r of requests) {
+      const key = r["Boolean Search String"];
+      if (!key) continue;
+      const existing = byString.get(key);
+      if (existing && new Date(existing.submittedAt) >= new Date(r["Submitted At"] || 0)) continue;
+      const stats = bySearch[key] || { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null };
+      byString.set(key, {
+        searchString: key,
+        location: r["Location/Region"] || "",
+        roleContext: r["Role Context"] || "",
+        submittedAt: r["Submitted At"] || null,
+        candidatesPooled: stats.count,
+        qualifiedCount: stats.qualified,
+        avgFitScore: stats.scoreCount ? Math.round(stats.scoreSum / stats.scoreCount) : null,
+        lastSourcedAt: stats.lastSourced
+      });
+    }
+
+    const history = Array.from(byString.values()).sort(
+      (a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)
+    );
+
+    const totals = {
+      totalSearches: history.length,
+      totalCandidatesPooled: candidates.length,
+      totalQualified: candidates.filter((c) => parseFloat(c["Fit Score"]) > 60).length
+    };
+
+    res.json({ history, totals });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
