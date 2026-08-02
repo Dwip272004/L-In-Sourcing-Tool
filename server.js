@@ -1,294 +1,906 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sourcing Desk</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
-
-const {
-  N8N_BASE_URL,                                        // e.g. https://diwp645.app.n8n.cloud  (no trailing slash)
-  N8N_API_KEY,                                          // n8n Settings > API > create an API key
-  N8N_FORM_WEBHOOK_ID = "696576aa-5fbe-4b76-849d-fd81f5f0cb2a", // "Sourcing Request Form" node's webhookId
-  N8N_WORKFLOW_ID = "jo9Q690CzrUwUZPv",
-  SHEET_ID = "1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w", // the Candidates sourcing Google Sheet
-  SEARCH_REQUESTS_TAB = "Search Requests",
-  CANDIDATES_TAB = "Candidates",
-  PORT = 3000
-} = process.env;
-
-if (!N8N_BASE_URL || !N8N_API_KEY) {
-  console.warn("[sourcing-desk] Missing N8N_BASE_URL or N8N_API_KEY env vars — set these on Render.");
-}
-
-function n8nHeaders() {
-  return { "X-N8N-API-KEY": N8N_API_KEY, accept: "application/json" };
-}
-
-// TEMP DEBUG endpoint: confirms whether the browser's fetch to our own
-// server is arriving with complete field data.
-app.post("/api/debug-echo", (req, res) => {
-  res.json({ receivedBody: req.body });
-});
-
-/**
- * Trigger the workflow by posting to its production Form Trigger webhook
- * (this is the same URL the public form page itself submits to — no n8n
- * auth needed here), then correlate the run with an execution record via
- * the n8n REST API so we have an id to poll.
- *
- * NOTE: the workflow must be ACTIVE in n8n for the production webhook to
- * respond. If it's still toggled off, activate it first.
- */
-app.post("/api/submit", async (req, res) => {
-  try {
-    const fields = req.body || {};
-
-    // Hard requirement check before we even talk to n8n — an empty submit
-    // here previously slipped through silently and produced a workflow
-    // error deep inside the LinkedIn search call instead of a clear message.
-    if (!fields.booleanSearchString || !fields.locationRegion) {
-      return res.status(400).json({ error: "Boolean search string and location are required." });
-    }
-
-    // n8n's Form Trigger does NOT use the field's real name (booleanSearchString,
-    // locationRegion, etc.) as the multipart field name — it uses positional
-    // keys matching the field's order in the form definition: field-0, field-1,
-    // ... This was confirmed by capturing the real form page's own submit
-    // request via browser devtools. This ordering must match the "Sourcing
-    // Request Form" node's formFields.values array exactly.
-    const FIELD_ORDER = [
-      "booleanSearchString", // field-0
-      "locationRegion",      // field-1
-      "roleContext",         // field-2
-      "roleKeywords",        // field-3
-      "skillsKeywords",      // field-4
-      "minYearsExperience",  // field-5
-      "seniorityLevel",      // field-6
-      "networkDistance",     // field-7
-      "spotlights",          // field-8
-      "recruitCrmJob"        // field-9
-    ];
-
-    const form = new FormData();
-    FIELD_ORDER.forEach((key, i) => {
-      const value = fields[key];
-      form.append(`field-${i}`, value !== undefined && value !== null ? String(value) : "");
-    });
-
-    // TEMP DEBUG: log exactly what's being sent to n8n. Check this in your
-    // Render service logs after a test submit.
-    console.log("[submit] forwarding positional fields to n8n:", Object.fromEntries(form.entries()));
-
-    const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
-    const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
-    if (!submitRes.ok) {
-      const text = await submitRes.text().catch(() => "");
-      return res.status(502).json({
-        error: `Webhook submit failed (${submitRes.status}). Is the workflow active? ${text.slice(0, 300)}`
-      });
-    }
-
-    // Give n8n a moment to create the execution record, then look it up.
-    // The form webhook itself doesn't return an execution id, so we find
-    // the newest execution for this workflow right after triggering it.
-    let executionId = null;
-    for (let attempt = 0; attempt < 6 && !executionId; attempt++) {
-      await new Promise((r) => setTimeout(r, 1200));
-      const listUrl = `${N8N_BASE_URL}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=5`;
-      const listRes = await fetch(listUrl, { headers: n8nHeaders() });
-      if (listRes.ok) {
-        const data = await listRes.json();
-        const executions = data.data || [];
-        if (executions.length) {
-          executions.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
-          executionId = executions[0].id;
-        }
-      }
-    }
-
-    if (!executionId) {
-      return res.status(202).json({
-        warning:
-          "Workflow triggered, but the execution couldn't be confirmed yet. Check the Candidates sheet or RecruitCRM directly."
-      });
-    }
-
-    // Sanity check: confirm the fields actually landed in n8n before we
-    // spend the next several minutes polling a run that's doomed to fail.
-    // Small delay so the "Sourcing Request Form" node has definitely run.
-    await new Promise((r) => setTimeout(r, 800));
-    try {
-      const checkUrl = `${N8N_BASE_URL}/api/v1/executions/${executionId}?includeData=true`;
-      const checkRes = await fetch(checkUrl, { headers: n8nHeaders() });
-      if (checkRes.ok) {
-        const checkData = await checkRes.json();
-        const runData = checkData?.data?.resultData?.runData || {};
-        const formRun = runData["Sourcing Request Form"];
-        const formJson = formRun?.[0]?.data?.main?.[0]?.[0]?.json;
-        if (formJson && !formJson.booleanSearchString) {
-          return res.status(502).json({
-            error:
-              "The workflow started, but n8n received an empty submission (fields came through as null). If you've edited the form fields in n8n since this was written, the FIELD_ORDER array in server.js needs to match the new field order exactly.",
-            executionId
-          });
-        }
-      }
-    } catch (checkErr) {
-      // Non-fatal — if this check itself fails, fall through and let normal
-      // polling / error reporting handle it.
-    }
-
-    res.json({ executionId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  :root{
+    --paper: #E7E3D8;
+    --paper-raised: #F1EEE4;
+    --ink: #23261F;
+    --ink-soft: #5B5A4D;
+    --rule: #C9C3AF;
+    --teal: #2B6E63;
+    --teal-deep: #1D4B43;
+    --amber: #B9822F;
+    --rust: #9C4A3A;
+    --card-shadow: 0 1px 0 rgba(35,38,31,0.06), 0 8px 20px -12px rgba(35,38,31,0.35);
+    --radius: 3px;
   }
-});
 
-app.get("/api/status/:id", async (req, res) => {
-  try {
-    const url = `${N8N_BASE_URL}/api/v1/executions/${req.params.id}?includeData=false`;
-    const r = await fetch(url, { headers: n8nHeaders() });
-    if (!r.ok) return res.status(r.status).json({ error: `Status check failed (${r.status})` });
-    const data = await r.json();
-    res.json({ status: data.status, finished: data.finished });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  *{ box-sizing: border-box; }
+
+  body{
+    margin:0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-});
 
-/**
- * Read a tab from the public Google Sheet via the gviz endpoint. This works
- * without any credentials as long as the sheet is shared as "Anyone with
- * the link can view" — the same mechanism Google uses for embedded charts.
- * If the sheet is later locked down, this will need a service account and
- * the official Sheets API instead.
- */
-async function fetchSheetRows(sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`Sheet fetch failed for "${sheetName}" (${r.status}). Is it shared as "Anyone with the link"?`);
-  const text = await r.text();
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1) throw new Error(`Unexpected response reading "${sheetName}" tab.`);
-  const data = JSON.parse(text.slice(start, end + 1));
-  const cols = data.table.cols.map((c) => c.label || c.id);
-  return (data.table.rows || []).map((row) => {
-    const obj = {};
-    (row.c || []).forEach((cell, i) => {
-      obj[cols[i]] = cell ? (cell.f !== undefined && cell.f !== null ? cell.f : cell.v) : null;
+  body::before{
+    content:"";
+    position: fixed; inset:0;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(35,38,31,0.015) 0px, rgba(35,38,31,0.015) 1px, transparent 1px, transparent 3px);
+    pointer-events:none;
+    z-index:0;
+  }
+
+  .wrap{
+    position:relative;
+    z-index:1;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 40px 28px 80px;
+  }
+
+  header.masthead{
+    display:flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 34px;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--teal-deep);
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
+  h1.title{
+    font-family:'Roboto Slab', Georgia, serif;
+    font-weight: 700;
+    font-size: clamp(28px, 4vw, 40px);
+    margin:0;
+    letter-spacing: -0.01em;
+  }
+  .masthead-meta{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+    text-align: right;
+    line-height: 1.6;
+  }
+  .masthead-meta span{ color: var(--ink); font-weight: 600; }
+
+  .desk{
+    display:grid;
+    grid-template-columns: 360px 1fr 340px;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 1180px){
+    .desk{ grid-template-columns: 360px 1fr; }
+    .history{ grid-column: 1 / -1; }
+  }
+  @media (max-width: 860px){
+    .desk{ grid-template-columns: 1fr; }
+    .history{ grid-column: auto; }
+  }
+
+  .card{
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+  }
+
+  .slip{
+    padding: 22px 22px 24px;
+    position: sticky;
+    top: 24px;
+  }
+  .slip-head{
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    border-bottom: 1px dashed var(--rule);
+    padding-bottom: 12px;
+  }
+  .slip-head h2{
+    font-family:'Roboto Slab', Georgia, serif;
+    font-size: 16px;
+    margin:0;
+    font-weight:600;
+  }
+  .slip-num{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-soft);
+  }
+
+  .field{ margin-bottom: 14px; }
+  .field label{
+    display:block;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-bottom: 5px;
+    color: var(--ink);
+  }
+  .field .hint{
+    display:block;
+    font-size: 10.5px;
+    color: var(--ink-soft);
+    font-weight: 400;
+    margin-top: 3px;
+    font-style: italic;
+  }
+  .field input[type=text],
+  .field input[type=number],
+  .field textarea,
+  .field select{
+    width:100%;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    padding: 8px 10px;
+    background: #FBFAF6;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    color: var(--ink);
+    resize: vertical;
+  }
+  .field textarea{ min-height: 56px; }
+  .field input:focus, .field textarea:focus, .field select:focus{
+    outline: none;
+    border-color: var(--teal);
+    box-shadow: 0 0 0 2px rgba(43,110,99,0.18);
+  }
+  .row-2{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .req-mark{ color: var(--rust); margin-left:3px; }
+
+  button.submit{
+    width:100%;
+    margin-top: 10px;
+    padding: 12px 16px;
+    background: var(--ink);
+    color: var(--paper-raised);
+    border:none;
+    border-radius: 2px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.submit:hover:not(:disabled){ background: var(--teal-deep); }
+  button.submit:disabled{ opacity: 0.5; cursor: not-allowed; }
+
+  .form-error{
+    font-size: 11.5px;
+    color: var(--rust);
+    margin-top: 8px;
+    font-family:'IBM Plex Mono', monospace;
+    display:none;
+  }
+
+  .board{ min-height: 420px; }
+
+  .empty-state{
+    padding: 70px 30px;
+    text-align:center;
+    color: var(--ink-soft);
+  }
+  .empty-state .glyph{
+    font-family:'Roboto Slab', serif;
+    font-size: 34px;
+    color: var(--rule);
+    margin-bottom: 10px;
+  }
+  .empty-state p{ font-size: 13px; max-width: 340px; margin: 6px auto 0; line-height:1.5; }
+
+  .ledger{
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .ledger-title{
+    display:flex; align-items:center; gap:10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 12px;
+  }
+  .dot{
+    width:7px; height:7px; border-radius:50%;
+    background: var(--rule);
+    flex: none;
+  }
+  .dot.live{ background: var(--teal); animation: pulse 1.2s ease-in-out infinite; }
+  .dot.done{ background: var(--teal); }
+  .dot.err{ background: var(--rust); }
+  @keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.35; } }
+
+  .ledger-lines{ font-family:'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.9; }
+  .ledger-line{
+    display:flex; gap:10px; opacity:0; transform: translateY(3px);
+    animation: rise 0.35s ease forwards;
+  }
+  .ledger-line .t{ color: var(--ink-soft); flex:none; }
+  .ledger-line .m{ color: var(--ink); }
+  .ledger-line.err .m{ color: var(--rust); font-weight:600; }
+  .ledger-line.ok .m::after{ content: " ✓"; color: var(--teal); }
+  @keyframes rise{ to{ opacity:1; transform: translateY(0); } }
+
+  .raw-toggle{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-soft);
+    background:none; border:none; text-decoration: underline;
+    cursor:pointer; padding: 0; margin-top: 10px;
+  }
+  pre.raw{
+    max-height: 220px; overflow:auto;
+    background:#1F221C; color:#D7D2C2;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    padding: 10px; border-radius:2px; margin-top:8px;
+    display:none;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  .summary{
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--rule);
+    display:flex; align-items:baseline; gap: 14px; flex-wrap:wrap;
+  }
+  .summary .count{
+    font-family:'Roboto Slab', serif;
+    font-weight:700; font-size: 30px; color: var(--teal-deep);
+    line-height:1;
+  }
+  .summary .label{ font-size: 12.5px; color: var(--ink-soft); }
+  .summary .job{ font-weight:600; color: var(--ink); }
+
+  .cards{
+    padding: 18px 22px 22px;
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+  }
+  .cc{
+    background:#FBFAF6;
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--rule);
+    border-radius: 2px;
+    padding: 13px 14px 14px;
+  }
+  .cc.tier-high{ border-left-color: var(--teal); }
+  .cc.tier-mid{ border-left-color: var(--amber); }
+  .cc.tier-low{ border-left-color: var(--rule); }
+
+  .cc-top{ display:flex; justify-content: space-between; align-items:flex-start; gap:8px; }
+  .cc-name{ font-family:'Roboto Slab', serif; font-weight:600; font-size: 14.5px; }
+  .cc-score{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px; font-weight:600;
+    padding: 2px 7px; border-radius: 10px;
+    background: rgba(43,110,99,0.12); color: var(--teal-deep);
+    flex:none;
+  }
+  .cc.tier-mid .cc-score{ background: rgba(185,130,47,0.14); color: var(--amber); }
+  .cc.tier-low .cc-score{ background: rgba(91,90,77,0.12); color: var(--ink-soft); }
+
+  .cc-role{ font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
+  .cc-loc{ font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+  .cc-summary{ font-size: 12px; margin-top: 8px; line-height:1.45; }
+  .cc-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top: 9px; }
+  .cc-tag{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    color: var(--ink-soft);
+  }
+  .cc-foot{ display:flex; justify-content: space-between; align-items:center; margin-top: 10px; }
+  .cc-link{ font-size: 11px; color: var(--teal-deep); text-decoration:none; }
+  .cc-link:hover{ text-decoration: underline; }
+  .cc-email{ font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); }
+  .cc-crm{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing:0.05em;
+    text-transform: uppercase; color: var(--teal-deep);
+  }
+
+  .cc-headline{ font-size: 11px; color: var(--ink-soft); margin-top: 2px; line-height:1.35; font-style: italic; }
+  .cc-badges{ display:flex; gap:5px; margin-top: 6px; flex-wrap: wrap; }
+  .cc-badge{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px;
+    padding: 1px 6px; border-radius: 8px; border: 1px solid var(--rule); color: var(--ink-soft);
+  }
+  .cc-badge.email-verified{ border-color: var(--teal); color: var(--teal-deep); }
+  .cc-badge.email-extrapolated{ border-color: var(--amber); color: var(--amber); }
+
+  .cc-tabs{ display:flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--rule); }
+  .cc-tab-btn{
+    font-family:'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+    background: none; border: none; padding: 4px 8px 6px; cursor: pointer;
+    color: var(--ink-soft); border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .cc-tab-btn.active{ color: var(--teal-deep); border-bottom-color: var(--teal); }
+  .cc-tabpanel{ font-size: 12px; margin-top: 8px; line-height:1.45; }
+  .cc-tabpanel[hidden]{ display:none; }
+
+  /* ---------- History panel ---------- */
+  .history{ position: sticky; top: 24px; }
+  .history-head{
+    padding: 18px 20px 14px;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .history-head h2{
+    font-family:'Roboto Slab', Georgia, serif;
+    font-size: 15px; margin: 0 0 4px; font-weight: 600;
+  }
+  .history-sub{ font-size: 11px; color: var(--ink-soft); }
+
+  .stats-strip{
+    display:grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .stat-cell{
+    background: var(--paper-raised);
+    padding: 12px 10px;
+    text-align:center;
+  }
+  .stat-num{
+    font-family:'Roboto Slab', serif; font-weight:700; font-size: 20px; color: var(--teal-deep);
+    line-height:1.1;
+  }
+  .stat-label{ font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing:0.05em; margin-top:3px; }
+
+  .history-list{ max-height: 620px; overflow-y: auto; }
+  .history-empty{ padding: 20px; font-size: 12px; color: var(--ink-soft); }
+  .history-row{
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--rule);
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .history-row:hover{ background: rgba(43,110,99,0.06); }
+  .history-row .hr-string{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .history-row .hr-meta{
+    display:flex; justify-content: space-between; align-items:center;
+    margin-top: 7px; font-size: 10.5px; color: var(--ink-soft);
+  }
+  .history-row .hr-loc{ font-style: italic; }
+  .history-row .hr-count{
+    font-family:'IBM Plex Mono', monospace; font-weight:600;
+    color: var(--teal-deep);
+    padding: 1px 6px; border-radius: 9px; background: rgba(43,110,99,0.1);
+  }
+  .history-row .hr-qualified{ color: var(--amber); }
+  .history-row .hr-reuse{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; text-transform: uppercase;
+    color: var(--teal-deep); letter-spacing: 0.04em; cursor: pointer;
+  }
+  .history-row .hr-reuse:hover{ text-decoration: underline; }
+  .history-refresh{
+    width:100%; padding: 9px; margin: 0;
+    background: transparent; border: none; border-top: 1px dashed var(--rule);
+    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;
+  }
+  .history-refresh:hover{ color: var(--teal-deep); }
+  .sheet-link{
+    display:block; padding: 10px 18px; font-size: 10.5px;
+    color: var(--teal-deep); text-decoration:none; border-top: 1px dashed var(--rule);
+  }
+  .sheet-link:hover{ text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Talent Sourcing / Internal Tool</p>
+      <h1 class="title">Sourcing Desk</h1>
+    </div>
+    <div class="masthead-meta">
+      Workflow: <span>LinkedIn Sourcing Tool</span><br/>
+      Runs via Unipile · OpenRouter · Apollo · RecruitCRM
+    </div>
+  </header>
+
+  <div class="desk">
+
+    <section class="card slip">
+      <div class="slip-head">
+        <h2>Search request</h2>
+        <span class="slip-num" id="slipNum">No. ——</span>
+      </div>
+
+      <form id="searchForm">
+        <div class="field">
+          <label>Boolean search string<span class="req-mark">*</span></label>
+          <textarea id="booleanSearchString" required placeholder='("Java Developer" OR "Backend Engineer") AND (AWS OR "Amazon Web Services") NOT Intern'></textarea>
+        </div>
+
+        <div class="field">
+          <label>Location / region<span class="req-mark">*</span></label>
+          <input type="text" id="locationRegion" required placeholder="e.g. United States" />
+        </div>
+
+        <div class="field">
+          <label>Role context <span class="hint">optional — sharpens AI fit scoring</span></label>
+          <textarea id="roleContext" placeholder="Paste extra JD context"></textarea>
+        </div>
+
+        <div class="row-2">
+          <div class="field">
+            <label>Role keywords <span class="hint">optional</span></label>
+            <input type="text" id="roleKeywords" placeholder="Backend Engineer" />
+          </div>
+          <div class="field">
+            <label>Skills <span class="hint">comma-separated</span></label>
+            <input type="text" id="skillsKeywords" placeholder="AWS, Python, K8s" />
+          </div>
+        </div>
+
+        <div class="row-2">
+          <div class="field">
+            <label>Seniority <span class="hint">optional</span></label>
+            <select id="seniorityLevel">
+              <option value="">—</option>
+              <option>Owner</option><option>Partner</option><option>CXO</option>
+              <option>VP</option><option>Director</option><option>Manager</option>
+              <option selected>Senior</option><option>Entry</option><option>Training</option><option>Unpaid</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Network distance <span class="hint">optional</span></label>
+            <select id="networkDistance">
+              <option value="">—</option>
+              <option>1st Degree</option><option>2nd Degree</option>
+              <option>3rd+ Degree</option><option>Group Members</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Candidate spotlight <span class="hint">optional</span></label>
+          <select id="spotlights">
+            <option value="">—</option>
+            <option selected>Open to Work</option><option>Active Talent</option>
+            <option>Rediscovered Candidates</option><option>Internal Candidates</option>
+            <option>Interested in Your Company</option><option>Have Company Connections</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Min. years experience <span class="hint">logged only — not applied as a filter on this Recruiter seat</span></label>
+          <input type="number" id="minYearsExperience" min="0" placeholder="e.g. 3" />
+        </div>
+
+        <div class="field">
+          <label>RecruitCRM job <span class="hint">leave blank to skip pushing to RecruitCRM</span></label>
+          <input type="text" id="recruitCrmJob" placeholder="Senior Backend Engineer" />
+        </div>
+
+        <button type="submit" class="submit" id="submitBtn">Run search</button>
+        <div class="form-error" id="formError">Fill in the boolean search string and location.</div>
+      </form>
+    </section>
+
+    <section class="card board" id="board">
+      <div class="empty-state" id="emptyState">
+        <div class="glyph">§</div>
+        <p>No search running. Submit a request on the left — this desk will show each step live, then lay out every candidate as it's scored and filed.</p>
+      </div>
+    </section>
+
+    <section class="card history">
+      <div class="history-head">
+        <h2>Sourcing history</h2>
+        <div class="history-sub">Pulled live from the Candidates sheet</div>
+      </div>
+      <div class="stats-strip" id="statsStrip">
+        <div class="stat-cell"><div class="stat-num">—</div><div class="stat-label">Searches</div></div>
+        <div class="stat-cell"><div class="stat-num">—</div><div class="stat-label">Candidates</div></div>
+        <div class="stat-cell"><div class="stat-num">—</div><div class="stat-label">Qualified</div></div>
+      </div>
+      <div class="history-list" id="historyList">
+        <div class="history-empty">Loading past searches…</div>
+      </div>
+      <button class="history-refresh" id="historyRefresh">Refresh</button>
+      <a class="sheet-link" href="https://docs.google.com/spreadsheets/d/1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w/edit?usp=sharing" target="_blank" rel="noopener">Open the full sheet →</a>
+    </section>
+
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const board = $("board");
+  const form = $("searchForm");
+  const submitBtn = $("submitBtn");
+  const formError = $("formError");
+  const slipNum = $("slipNum");
+
+  let runCount = 0;
+  let linesEl, dotEl;
+
+  function renderLedgerShell(){
+    runCount += 1;
+    slipNum.textContent = "No. " + String(runCount).padStart(3, "0");
+    board.innerHTML = `
+      <div class="ledger">
+        <div class="ledger-title"><span class="dot live" id="statusDot"></span><span id="statusLabel">Processing</span></div>
+        <div class="ledger-lines" id="ledgerLines"></div>
+        <button class="raw-toggle" id="rawToggle" style="display:none;">view raw response</button>
+        <pre class="raw" id="rawBox"></pre>
+      </div>
+    `;
+    linesEl = $("ledgerLines");
+    dotEl = $("statusDot");
+    $("rawToggle").addEventListener("click", () => {
+      const box = $("rawBox");
+      box.style.display = box.style.display === "block" ? "none" : "block";
     });
-    return obj;
-  });
-}
+  }
 
-// Combines the Search Requests + Candidates tabs into a reusable search
-// history: each past boolean search string, how many candidates it pooled,
-// how many cleared the fit-score bar, and average fit score.
-app.get("/api/sheet-overview", async (req, res) => {
-  try {
-    const [requests, candidates] = await Promise.all([
-      fetchSheetRows(SEARCH_REQUESTS_TAB).catch(() => []), // best-effort only, see below
-      fetchSheetRows(CANDIDATES_TAB)
-    ]);
+  function ledgerLine(text, state){
+    const line = document.createElement("div");
+    line.className = "ledger-line " + (state || "");
+    const now = new Date();
+    const t = now.toTimeString().slice(0,8);
+    line.innerHTML = `<span class="t">${t}</span><span class="m">${text}</span>`;
+    linesEl.appendChild(line);
+    return line;
+  }
 
-    // Build history straight from the Candidates tab, grouped by the unique
-    // search keyword strings actually used. This is the reliable source —
-    // the Search Requests tab was found to silently return nothing (wrong
-    // headers/tab name/never written), which made totals populate but the
-    // history list stay empty. Candidates data alone is enough to answer
-    // "what searches have we run and how many candidates did each pool."
-    const bySearch = {};
-    for (const c of candidates) {
-      const key = c["Search Keywords"] || "(unknown search)";
-      if (!bySearch[key]) {
-        bySearch[key] = { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null, sampleLocation: "" };
-      }
-      const bucket = bySearch[key];
-      bucket.count += 1;
-      const score = parseFloat(c["Fit Score"]);
-      if (!isNaN(score)) {
-        bucket.scoreSum += score;
-        bucket.scoreCount += 1;
-        if (score > 60) bucket.qualified += 1;
-      }
-      const sourcedAt = c["Sourced At"];
-      if (sourcedAt && (!bucket.lastSourced || sourcedAt > bucket.lastSourced)) bucket.lastSourced = sourcedAt;
-    }
+  function setStatus(state, label){
+    dotEl.className = "dot " + state;
+    $("statusLabel").textContent = label;
+  }
 
-    // Best-effort enrichment: if the Search Requests tab does have usable
-    // rows, borrow the original target location/role context per search
-    // string. If it doesn't, history still works fine without this.
-    const requestMeta = new Map();
-    for (const r of requests) {
-      const key = r["Boolean Search String"];
-      if (!key) continue;
-      const existing = requestMeta.get(key);
-      if (existing && new Date(existing.submittedAt || 0) >= new Date(r["Submitted At"] || 0)) continue;
-      requestMeta.set(key, {
-        location: r["Location/Region"] || "",
-        roleContext: r["Role Context"] || "",
-        submittedAt: r["Submitted At"] || null
+  function showRaw(obj){
+    const btn = $("rawToggle");
+    const box = $("rawBox");
+    btn.style.display = "inline-block";
+    box.textContent = JSON.stringify(obj, null, 2);
+  }
+
+  function formatDistance(d){
+    const map = { DISTANCE_1: "1st °", DISTANCE_2: "2nd °", DISTANCE_3: "3rd+ °" };
+    return map[d] || d;
+  }
+
+  function tierFor(score){
+    if(score === null || score === undefined || isNaN(score)) return "tier-low";
+    if(score > 75) return "tier-high";
+    if(score > 60) return "tier-mid";
+    return "tier-low";
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+  }
+
+  function buildCandidateCards(cardsWrap, candidates){
+    if(candidates && candidates.length){
+      candidates.forEach((c, idx) => {
+        const score = c.fit_score;
+        const tier = tierFor(score);
+        const el = document.createElement("div");
+        el.className = "cc " + tier;
+        const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
+        const cardId = "cc-" + idx + "-" + Date.now();
+        el.innerHTML = `
+          <div class="cc-top">
+            <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
+            <div class="cc-score">${score !== undefined && score !== null && score !== "" ? score : "—"}</div>
+          </div>
+          <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
+          <div class="cc-loc">${escapeHtml(c.location || "")}</div>
+          ${c.headline ? `<div class="cc-headline">${escapeHtml(c.headline)}</div>` : ""}
+          <div class="cc-badges">
+            ${c.network_distance ? `<span class="cc-badge">${escapeHtml(formatDistance(c.network_distance))}</span>` : ""}
+            ${c.email_status ? `<span class="cc-badge ${c.email_status === "verified" ? "email-verified" : c.email_status === "extrapolated" ? "email-extrapolated" : ""}">${escapeHtml(c.email_status)}</span>` : ""}
+          </div>
+          <div class="cc-tabs">
+            <button class="cc-tab-btn active" data-card="${cardId}" data-tab="fit">Fit</button>
+            ${c.gaps ? `<button class="cc-tab-btn" data-card="${cardId}" data-tab="gaps">Gaps</button>` : ""}
+          </div>
+          <div class="cc-tabpanel" data-card="${cardId}" data-panel="fit">
+            ${c.ai_summary ? escapeHtml(c.ai_summary) : "<em>No summary available.</em>"}
+            ${tags.length ? `<div class="cc-tags">${tags.map(t=>`<span class="cc-tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+          </div>
+          ${c.gaps ? `<div class="cc-tabpanel" data-card="${cardId}" data-panel="gaps" hidden>${escapeHtml(c.gaps)}</div>` : ""}
+          <div class="cc-foot">
+            <span>
+              ${c.public_profile_url ? `<a class="cc-link" href="${escapeHtml(c.public_profile_url)}" target="_blank" rel="noopener">Profile</a>` : ""}
+              ${c.talent_profile_url ? ` · <a class="cc-link" href="${escapeHtml(c.talent_profile_url)}" target="_blank" rel="noopener">Recruiter</a>` : ""}
+            </span>
+            ${c.email && c.email !== "Not found" ? `<span class="cc-email">${escapeHtml(c.email)}</span>` : ""}
+          </div>
+          ${(tier === "tier-high" || tier === "tier-mid") && score > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
+        `;
+        cardsWrap.appendChild(el);
       });
+
+      // Simple tab toggling, delegated once per render.
+      cardsWrap.addEventListener("click", (e) => {
+        const btn = e.target.closest(".cc-tab-btn");
+        if(!btn) return;
+        const cardId = btn.dataset.card;
+        const tab = btn.dataset.tab;
+        cardsWrap.querySelectorAll(`.cc-tab-btn[data-card="${cardId}"]`).forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+        cardsWrap.querySelectorAll(`.cc-tabpanel[data-card="${cardId}"]`).forEach(p => { p.hidden = p.dataset.panel !== tab; });
+      });
+    } else {
+      const none = document.createElement("div");
+      none.style.cssText = "padding:24px; color:var(--ink-soft); font-size:12.5px;";
+      none.textContent = "No candidate detail available here. Check the sheet directly, or view the raw response above.";
+      cardsWrap.appendChild(none);
+    }
+  }
+
+  function renderResults(candidates, summary){
+    const wrap = document.createElement("div");
+
+    if(summary){
+      const s = document.createElement("div");
+      s.className = "summary";
+      s.innerHTML = `
+        <span class="count">${summary.count ?? "—"}</span>
+        <span class="label">candidate${(summary.count === 1) ? "" : "s"} filed to RecruitCRM under <span class="job">${escapeHtml(summary.jobName || "—")}</span></span>
+      `;
+      wrap.appendChild(s);
     }
 
-    const history = Object.entries(bySearch)
-      .map(([searchString, stats]) => {
-        const meta = requestMeta.get(searchString) || {};
-        return {
-          searchString,
-          location: meta.location || "",
-          roleContext: meta.roleContext || "",
-          submittedAt: meta.submittedAt || stats.lastSourced,
-          candidatesPooled: stats.count,
-          qualifiedCount: stats.qualified,
-          avgFitScore: stats.scoreCount ? Math.round(stats.scoreSum / stats.scoreCount) : null,
-          lastSourcedAt: stats.lastSourced
-        };
-      })
-      .sort((a, b) => new Date(b.lastSourcedAt || 0) - new Date(a.lastSourcedAt || 0));
+    const cardsWrap = document.createElement("div");
+    cardsWrap.className = "cards";
+    buildCandidateCards(cardsWrap, candidates);
+    wrap.appendChild(cardsWrap);
+    board.appendChild(wrap);
+  }
 
-    const totals = {
-      totalSearches: history.length,
-      totalCandidatesPooled: candidates.length,
-      totalQualified: candidates.filter((c) => parseFloat(c["Fit Score"]) > 60).length
+  // Shows candidates already pooled for a past search, pulled from the
+  // sheet-overview payload — no workflow run, just browsing history.
+  function renderHistoryCandidates(item){
+    board.innerHTML = "";
+    const wrap = document.createElement("div");
+
+    const s = document.createElement("div");
+    s.className = "summary";
+    s.innerHTML = `
+      <span class="count">${item.candidatesPooled}</span>
+      <span class="label">candidates pooled for <span class="job">${escapeHtml(item.searchString)}</span>
+        — ${item.qualifiedCount} qualified${item.avgFitScore !== null && item.avgFitScore !== undefined ? `, avg fit ${item.avgFitScore}` : ""}
+      </span>
+    `;
+    wrap.appendChild(s);
+
+    const cardsWrap = document.createElement("div");
+    cardsWrap.className = "cards";
+    buildCandidateCards(cardsWrap, item.candidates || []);
+    wrap.appendChild(cardsWrap);
+    board.appendChild(wrap);
+  }
+
+  async function runSearch(formData){
+    renderLedgerShell();
+    ledgerLine("Request received", "ok");
+
+    let executionId;
+    try{
+      ledgerLine("Starting workflow…");
+      const submitRes = await fetch("/api/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData)
+      });
+      const submitJson = await submitRes.json();
+      showRaw(submitJson);
+      if(!submitRes.ok || submitJson.error){
+        const idNote = submitJson.executionId ? ` (execution ${submitJson.executionId})` : "";
+        throw new Error((submitJson.error || "Submit failed.") + idNote);
+      }
+      if(submitJson.warning){
+        ledgerLine(submitJson.warning, "err");
+        setStatus("err", "Unconfirmed");
+        return;
+      }
+      executionId = submitJson.executionId;
+      ledgerLine(`Running (#${executionId})`, "ok");
+    } catch(err){
+      ledgerLine("Could not start the workflow: " + err.message, "err");
+      setStatus("err", "Failed to start");
+      return;
+    }
+
+    ledgerLine("Searching LinkedIn, scoring fits…");
+    let finalStatus = null;
+    const maxAttempts = 90; // ~4.5 min at 3s
+    for(let attempt = 0; attempt < maxAttempts; attempt++){
+      await new Promise(r => setTimeout(r, 3000));
+      try{
+        const statusRes = await fetch(`/api/status/${executionId}`);
+        const statusJson = await statusRes.json();
+        if(statusJson.status === "success" || statusJson.finished === true){ finalStatus = "success"; break; }
+        if(statusJson.status === "error" || statusJson.status === "crashed"){ finalStatus = "error"; break; }
+      } catch(err){ /* transient, keep polling */ }
+    }
+
+    if(finalStatus === "error"){
+      ledgerLine("Workflow reported an error.", "err");
+      setStatus("err", "Failed");
+      return;
+    }
+    if(finalStatus !== "success"){
+      ledgerLine("Still running after several minutes — check RecruitCRM / the Candidates sheet directly.", "err");
+      setStatus("err", "Timed out watching status");
+      return;
+    }
+
+    ledgerLine("Scored & saved to sheet", "ok");
+    ledgerLine("Loading results…");
+
+    try{
+      const resultsRes = await fetch(`/api/results/${executionId}`);
+      const resultsJson = await resultsRes.json();
+      showRaw(resultsJson);
+      if(!resultsRes.ok || resultsJson.error) throw new Error(resultsJson.error || "Results fetch failed.");
+      ledgerLine("Done", "ok");
+      setStatus("done", "Complete");
+      renderResults(resultsJson.candidates, resultsJson.summary);
+      loadHistory();
+    } catch(err){
+      ledgerLine("Run finished, but results couldn't be loaded: " + err.message, "err");
+      setStatus("err", "Results unavailable");
+    }
+  }
+
+  // ---------- History panel ----------
+  const statsStrip = $("statsStrip");
+  const historyList = $("historyList");
+
+  function escapeHtmlShort(str){ return escapeHtml(str); }
+
+  function timeAgo(iso){
+    if(!iso) return "";
+    const d = new Date(iso);
+    if(isNaN(d)) return "";
+    const diffMs = Date.now() - d.getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if(mins < 1) return "just now";
+    if(mins < 60) return mins + "m ago";
+    const hrs = Math.floor(mins / 60);
+    if(hrs < 24) return hrs + "h ago";
+    const days = Math.floor(hrs / 24);
+    if(days < 30) return days + "d ago";
+    return d.toLocaleDateString();
+  }
+
+  function renderStats(totals){
+    const cells = statsStrip.querySelectorAll(".stat-num");
+    cells[0].textContent = totals.totalSearches ?? "—";
+    cells[1].textContent = totals.totalCandidatesPooled ?? "—";
+    cells[2].textContent = totals.totalQualified ?? "—";
+  }
+
+  function renderHistory(history){
+    if(!history || !history.length){
+      historyList.innerHTML = '<div class="history-empty">No past searches found in the sheet yet.</div>';
+      return;
+    }
+    historyList.innerHTML = "";
+    history.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "history-row";
+      row.innerHTML = `
+        <div class="hr-string">${escapeHtmlShort(item.searchString)}</div>
+        <div class="hr-meta">
+          <span class="hr-loc">${escapeHtmlShort(item.location || "")}</span>
+          <span>
+            <span class="hr-count">${item.candidatesPooled} pooled</span>
+            ${item.qualifiedCount ? ` <span class="hr-qualified">${item.qualifiedCount} qualified</span>` : ""}
+          </span>
+        </div>
+        <div class="hr-meta">
+          <span>${timeAgo(item.submittedAt)}</span>
+          <span class="hr-reuse" data-reuse="1">Reuse ↺</span>
+        </div>
+      `;
+      row.addEventListener("click", (e) => {
+        if(e.target.closest("[data-reuse]")){
+          $("booleanSearchString").value = item.searchString || "";
+          $("locationRegion").value = item.location || "";
+          $("roleContext").value = item.roleContext || "";
+          $("booleanSearchString").scrollIntoView({ behavior: "smooth", block: "center" });
+          formError.style.display = "none";
+          e.stopPropagation();
+          return;
+        }
+        renderHistoryCandidates(item);
+      });
+      historyList.appendChild(row);
+    });
+  }
+
+  async function loadHistory(){
+    historyList.innerHTML = '<div class="history-empty">Loading past searches…</div>';
+    try{
+      const res = await fetch("/api/sheet-overview");
+      const data = await res.json();
+      if(!res.ok || data.error) throw new Error(data.error || "Failed to load sheet data.");
+      renderStats(data.totals || {});
+      renderHistory(data.history || []);
+    } catch(err){
+      historyList.innerHTML = `<div class="history-empty">Couldn't load sheet data: ${escapeHtmlShort(err.message)}</div>`;
+    }
+  }
+
+  $("historyRefresh").addEventListener("click", loadHistory);
+  loadHistory();
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const booleanSearchString = $("booleanSearchString").value.trim();
+    const locationRegion = $("locationRegion").value.trim();
+    if(!booleanSearchString || !locationRegion){
+      formError.style.display = "block";
+      return;
+    }
+    formError.style.display = "none";
+
+    const formData = {
+      booleanSearchString,
+      locationRegion,
+      roleContext: $("roleContext").value.trim(),
+      roleKeywords: $("roleKeywords").value.trim(),
+      skillsKeywords: $("skillsKeywords").value.trim(),
+      minYearsExperience: $("minYearsExperience").value,
+      seniorityLevel: $("seniorityLevel").value,
+      networkDistance: $("networkDistance").value,
+      spotlights: $("spotlights").value,
+      recruitCrmJob: $("recruitCrmJob").value.trim(),
+      submittedAt: new Date().toISOString()
     };
 
-    res.json({ history, totals });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/results/:id", async (req, res) => {
-  try {
-    const url = `${N8N_BASE_URL}/api/v1/executions/${req.params.id}?includeData=true`;
-    const r = await fetch(url, { headers: n8nHeaders() });
-    if (!r.ok) return res.status(r.status).json({ error: `Results fetch failed (${r.status})` });
-    const data = await r.json();
-
-    const runData = (data && data.data && data.data.resultData && data.data.resultData.runData) || {};
-
-    function nodeItems(nodeName) {
-      const runs = runData[nodeName] || [];
-      const items = [];
-      for (const run of runs) {
-        const mainOut = (run && run.data && run.data.main && run.data.main[0]) || [];
-        for (const it of mainOut) if (it && it.json) items.push(it.json);
-      }
-      return items;
-    }
-
-    const candidates = nodeItems("Extract Enriched Email");
-    const summaryItems = nodeItems("Build CRM Upload Summary");
-    const summary = summaryItems[0] || null;
-
-    res.json({ candidates, summary });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.listen(PORT, () => console.log(`Sourcing desk proxy listening on port ${PORT}`));
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Running…";
+    runSearch(formData).finally(() => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Run search";
+    });
+  });
+})();
+</script>
+</body>
+</html>
