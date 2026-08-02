@@ -42,7 +42,7 @@ app.post("/api/submit", async (req, res) => {
       }
     }
 
-    const webhookUrl = `${N8N_BASE_URL}/form/${N8N_FORM_WEBHOOK_ID}`;
+    const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
     const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!submitRes.ok) {
       const text = await submitRes.text().catch(() => "");
