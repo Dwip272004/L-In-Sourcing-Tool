@@ -356,6 +356,12 @@
     border: 1px solid var(--teal); border-radius: 8px; padding: 2px 7px; white-space: nowrap;
   }
   .cc.assigned{ border-left-color: var(--teal); }
+  .cc.top20{ box-shadow: 0 0 0 1px var(--amber) inset; }
+  .cc-top20-badge{
+    display:inline-block; margin-left:6px; vertical-align:middle;
+    font-family:'IBM Plex Mono', monospace; font-size: 8.5px; letter-spacing:0.05em;
+    color: #7a4a00; background: var(--amber); border-radius: 8px; padding: 1px 6px;
+  }
 
   .assign-bar{
     margin: 0 24px 4px;
@@ -383,6 +389,11 @@
   .assign-status{ font-size: 11px; font-family:'IBM Plex Mono', monospace; margin-top: 2px; min-height: 14px; }
   .assign-status.ok{ color: var(--teal-deep); }
   .assign-status.err{ color: var(--rust); }
+  .assign-mass-btn{
+    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing:0.03em; text-transform: uppercase;
+    padding: 6px 10px; background: transparent; color: var(--teal-deep); border:1px solid var(--teal); border-radius:2px; cursor:pointer;
+  }
+  .assign-mass-btn:hover{ background: rgba(43,110,99,0.1); }
 
   .cc-badges{ display:flex; gap:6px; margin-top: 10px; flex-wrap: wrap; }
   .cc-badge{
@@ -682,7 +693,8 @@
         const ringColor = tier === "tier-high" ? "var(--teal)" : tier === "tier-mid" ? "var(--amber)" : "var(--rule)";
         const el = document.createElement("div");
         const alreadyAssigned = !!c.assigned_job;
-        el.className = "cc " + tier + (alreadyAssigned ? " assigned" : "");
+        const isTop20 = idx < 20;
+        el.className = "cc " + tier + (alreadyAssigned ? " assigned" : "") + (isTop20 ? " top20" : "");
         if(c.recruitcrm_slug) el.dataset.slug = c.recruitcrm_slug;
         const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
         const cardId = "cc-" + idx + "-" + Date.now();
@@ -691,7 +703,7 @@
           <div class="cc-top">
             <div class="cc-avatar">${escapeHtml(initials || "?")}</div>
             <div class="cc-id">
-              <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}</div>
+              <div class="cc-name">${escapeHtml(c.name || "Unnamed candidate")}${isTop20 ? '<span class="cc-top20-badge">TOP 20</span>' : ""}</div>
               <div class="cc-role">${escapeHtml(c.current_role || "")}${c.current_company ? " · " + escapeHtml(c.current_company) : ""}</div>
               <div class="cc-loc">${escapeHtml(c.location || "")}</div>
             </div>
@@ -782,6 +794,12 @@
         <span class="assign-hint">Check candidates below, then assign the selected ones to a job — or leave the job blank and confirm they stay unassigned. Everyone left unchecked isn't touched.</span>
       </div>
       <div class="assign-bar-row">
+        <button type="button" class="assign-mass-btn" data-mass="all">Select all</button>
+        <button type="button" class="assign-mass-btn" data-mass="top20">Select top 20</button>
+        <button type="button" class="assign-mass-btn" data-mass="first50">Select first 50</button>
+        <button type="button" class="assign-mass-btn" data-mass="none">Clear selection</button>
+      </div>
+      <div class="assign-bar-row">
         <input type="text" class="assign-job-input" placeholder="RecruitCRM job name (optional)" value="${escapeHtml(defaultJob || "")}" />
         <button type="button" class="assign-btn" disabled>Assign selected (<span class="assign-count">0</span>)</button>
       </div>
@@ -790,6 +808,29 @@
     const btn = bar.querySelector(".assign-btn");
     const jobInput = bar.querySelector(".assign-job-input");
     const statusEl = bar.querySelector(".assign-status");
+
+    // Mass-select works by toggling each checkbox and dispatching a real
+    // "change" event, so the existing per-checkbox handler (which owns
+    // assignSelection) stays the single source of truth — no duplicate
+    // selection logic to keep in sync.
+    bar.querySelectorAll(".assign-mass-btn").forEach(massBtn => {
+      massBtn.addEventListener("click", () => {
+        const mode = massBtn.dataset.mass;
+        const cards = Array.from(wrap.querySelectorAll(".cc"));
+        cards.forEach((card, cardIdx) => {
+          const cb = card.querySelector(".cc-select");
+          if(!cb || cb.disabled) return;
+          const shouldCheck = mode === "all" ? true
+            : mode === "top20" ? card.classList.contains("top20")
+            : mode === "first50" ? cardIdx < 50
+            : false;
+          if(cb.checked !== shouldCheck){
+            cb.checked = shouldCheck;
+            cb.dispatchEvent(new Event("change"));
+          }
+        });
+      });
+    });
 
     btn.addEventListener("click", async () => {
       const jobQuery = jobInput.value.trim();
@@ -890,6 +931,7 @@
     s.innerHTML = `
       <span class="count">${item.candidatesPooled}</span>
       <span class="label">candidates pooled for <span class="job">${escapeHtml(item.searchString)}</span>
+        ${item.totalFoundOnLinkedIn ? ` — ${item.totalFoundOnLinkedIn} total found on LinkedIn Recruiter` : ""}
         — ${item.qualifiedCount} qualified${item.avgFitScore !== null && item.avgFitScore !== undefined ? `, avg fit ${item.avgFitScore}` : ""}
       </span>
     `;
@@ -1035,7 +1077,7 @@
         <div class="hr-meta">
           <span class="hr-loc">${escapeHtmlShort(item.location || "")}</span>
           <span>
-            <span class="hr-count">${item.candidatesPooled} pooled</span>
+            <span class="hr-count">${item.candidatesPooled} pooled${item.totalFoundOnLinkedIn ? ` of ${item.totalFoundOnLinkedIn} found` : ""}</span>
             ${item.qualifiedCount ? ` <span class="hr-qualified">${item.qualifiedCount} qualified</span>` : ""}
           </span>
         </div>
