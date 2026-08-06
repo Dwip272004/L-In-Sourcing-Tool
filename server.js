@@ -193,11 +193,18 @@ app.get("/api/status/:id", async (req, res) => {
     const totalCandidates = itemCount("Split Candidates") || null;
     const processedCandidates = itemCount("Merge RecruitCRM Slug");
 
+    // True total LinkedIn Recruiter reports for this search, which can be
+    // much larger than what got pulled into this batch.
+    const searchRuns = runData["LinkedIn People Search"] || [];
+    const searchOut = (searchRuns[0] && searchRuns[0].data && searchRuns[0].data.main && searchRuns[0].data.main[0] && searchRuns[0].data.main[0][0] && searchRuns[0].data.main[0][0].json) || null;
+    const totalFoundOnLinkedIn = (searchOut && searchOut.paging && searchOut.paging.total_count) || null;
+
     res.json({
       status: data.status,
       finished: data.finished,
       totalCandidates,
-      processedCandidates
+      processedCandidates,
+      totalFoundOnLinkedIn
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -374,7 +381,14 @@ app.get("/api/results/:id", async (req, res) => {
     const summaryItems = nodeItems("Build CRM Upload Summary");
     const summary = summaryItems[0] || null;
 
-    res.json({ candidates, summary });
+    // The true total LinkedIn Recruiter reports matching this search (can be
+    // far larger than the batch actually pulled/scored) — straight off the
+    // raw search response, not something we compute.
+    const searchItems = nodeItems("LinkedIn People Search");
+    const totalFoundOnLinkedIn =
+      (searchItems[0] && searchItems[0].paging && searchItems[0].paging.total_count) || null;
+
+    res.json({ candidates, summary, totalFoundOnLinkedIn });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
