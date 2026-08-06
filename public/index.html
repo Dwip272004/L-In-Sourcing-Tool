@@ -720,7 +720,7 @@
             </span>
             ${c.email && c.email !== "Not found" ? `<span class="cc-email">${escapeHtml(c.email)}</span>` : ""}
           </div>
-          ${(tier === "tier-high" || tier === "tier-mid") && numericScore > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
+          <div class="cc-crm">Added to RecruitCRM (unassigned)</div>
           <div class="cc-select-row">
             <label class="cc-select-label">
               <input type="checkbox" class="cc-select" ${c.recruitcrm_slug ? "" : "disabled"} />
@@ -846,8 +846,18 @@
     return bar;
   }
 
-  function renderResults(candidates, summary){
+  function renderResults(candidates, summary, totalFoundOnLinkedIn){
     const wrap = document.createElement("div");
+
+    if(totalFoundOnLinkedIn){
+      const t = document.createElement("div");
+      t.className = "summary";
+      t.innerHTML = `
+        <span class="count">${totalFoundOnLinkedIn}</span>
+        <span class="label">total candidates matching this search on LinkedIn Recruiter — ${(candidates || []).length} pulled into this batch</span>
+      `;
+      wrap.appendChild(t);
+    }
 
     if(summary){
       const s = document.createElement("div");
@@ -929,6 +939,7 @@
     ledgerLine("Searching LinkedIn, scoring fits…");
     let finalStatus = null;
     let progressLine = null;
+    let totalFoundOnLinkedIn = null;
     const maxAttempts = 90; // ~4.5 min at 3s
     for(let attempt = 0; attempt < maxAttempts; attempt++){
       await new Promise(r => setTimeout(r, 3000));
@@ -936,8 +947,11 @@
         const statusRes = await fetch(`/api/status/${executionId}`);
         const statusJson = await statusRes.json();
 
+        if(statusJson.totalFoundOnLinkedIn) totalFoundOnLinkedIn = statusJson.totalFoundOnLinkedIn;
+
         if(statusJson.totalCandidates){
-          const text = `Scored & filed ${statusJson.processedCandidates || 0} of ${statusJson.totalCandidates} candidates…`;
+          const foundText = totalFoundOnLinkedIn ? ` (${totalFoundOnLinkedIn} total found on LinkedIn Recruiter)` : "";
+          const text = `Scored & filed ${statusJson.processedCandidates || 0} of ${statusJson.totalCandidates} candidates…${foundText}`;
           if(progressLine){
             progressLine.querySelector(".m").textContent = text;
           } else {
@@ -971,7 +985,7 @@
       if(!resultsRes.ok || resultsJson.error) throw new Error(resultsJson.error || "Results fetch failed.");
       ledgerLine("Done", "ok");
       setStatus("done", "Complete");
-      renderResults(resultsJson.candidates, resultsJson.summary);
+      renderResults(resultsJson.candidates, resultsJson.summary, resultsJson.totalFoundOnLinkedIn);
       loadHistory();
     } catch(err){
       ledgerLine("Run finished, but results couldn't be loaded: " + err.message, "err");
