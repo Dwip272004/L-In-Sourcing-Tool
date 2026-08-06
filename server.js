@@ -83,14 +83,8 @@ app.post("/api/submit", async (req, res) => {
     console.log("[submit] forwarding positional fields to n8n:", Object.fromEntries(form.entries()));
 
     // Recorded BEFORE triggering the webhook, with a generous clock-skew
-    // buffer. This is the guard against the real bug we hit: n8n's execution
-    // list has a brief indexing delay after a webhook fires, and during that
-    // gap the "newest execution" in the list can be a completely unrelated
-    // PRIOR run that happens to still be the most recent one indexed. Without
-    // a time floor, that stale execution gets mistaken for the one we just
-    // triggered — the dashboard then reports whatever that old run's status
-    // was (often an already-failed one) while the real new execution keeps
-    // running, unwatched, in the background.
+    // buffer — used by /api/find-execution to make sure a stale prior
+    // execution is never mistaken for the one just triggered.
     const submitFloor = new Date(Date.now() - 10000).toISOString();
 
     const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
@@ -102,62 +96,45 @@ app.post("/api/submit", async (req, res) => {
       });
     }
 
-    // Give n8n a moment to create the execution record, then look it up.
-    // The form webhook itself doesn't return an execution id, so we find
-    // the newest execution for this workflow right after triggering it —
-    // but ONLY among executions that started at/after submitFloor, so a
-    // stale prior execution can never be picked up by mistake.
-    let executionId = null;
-    for (let attempt = 0; attempt < 20 && !executionId; attempt++) {
-      await new Promise((r) => setTimeout(r, 1500));
-      const listUrl = `${N8N_BASE_URL}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=10`;
-      const listRes = await fetch(listUrl, { headers: n8nHeaders() });
-      if (listRes.ok) {
-        const data = await listRes.json();
-        const executions = data.data || [];
-        const candidates = executions.filter((e) => e.startedAt && e.startedAt >= submitFloor);
-        if (candidates.length) {
-          // Earliest among the qualifying ones — i.e. the first new
-          // execution to appear after our submit, not just "newest overall".
-          candidates.sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
-          executionId = candidates[0].id;
-        }
-      }
-    }
+    // Deliberately does NOT wait here to look up the execution id. A big
+    // batch can now take several minutes end to end (100 candidates,
+    // multi-page pagination) — blocking a single HTTP request/response
+    // cycle on that would risk the browser or hosting platform's own
+    // request timeout killing the connection, independent of whatever
+    // timeout value we picked here. The dashboard instead polls
+    // /api/find-execution itself, as many short-lived requests as it
+    // takes, which has no such ceiling.
+    res.json({ ok: true, submittedAt: submitFloor });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    if (!executionId) {
-      return res.status(202).json({
-        warning:
-          "Workflow triggered, but the execution couldn't be confirmed yet. Check the Candidates sheet or RecruitCRM directly."
-      });
-    }
+/**
+ * Single-shot lookup: is there an execution for this workflow that started
+ * at/after `since`? No internal waiting loop — the dashboard calls this
+ * repeatedly itself so no individual request can time out no matter how
+ * long the actual n8n run takes.
+ */
+app.get("/api/find-execution", async (req, res) => {
+  try {
+    const since = req.query.since;
+    if (!since) return res.status(400).json({ error: "Missing since parameter." });
 
-    // Sanity check: confirm the fields actually landed in n8n before we
-    // spend the next several minutes polling a run that's doomed to fail.
-    // Small delay so the "Sourcing Request Form" node has definitely run.
-    await new Promise((r) => setTimeout(r, 800));
-    try {
-      const checkUrl = `${N8N_BASE_URL}/api/v1/executions/${executionId}?includeData=true`;
-      const checkRes = await fetch(checkUrl, { headers: n8nHeaders() });
-      if (checkRes.ok) {
-        const checkData = await checkRes.json();
-        const runData = checkData?.data?.resultData?.runData || {};
-        const formRun = runData["Sourcing Request Form"];
-        const formJson = formRun?.[0]?.data?.main?.[0]?.[0]?.json;
-        if (formJson && !formJson.booleanSearchString) {
-          return res.status(502).json({
-            error:
-              "The workflow started, but n8n received an empty submission (fields came through as null). If you've edited the form fields in n8n since this was written, the FIELD_ORDER array in server.js needs to match the new field order exactly.",
-            executionId
-          });
-        }
-      }
-    } catch (checkErr) {
-      // Non-fatal — if this check itself fails, fall through and let normal
-      // polling / error reporting handle it.
-    }
+    const listUrl = `${N8N_BASE_URL}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=50`;
+    const listRes = await fetch(listUrl, { headers: n8nHeaders() });
+    if (!listRes.ok) return res.status(listRes.status).json({ error: `Execution lookup failed (${listRes.status}).` });
 
-    res.json({ executionId });
+    const data = await listRes.json();
+    const executions = data.data || [];
+    const candidates = executions.filter((e) => e.startedAt && e.startedAt >= since);
+
+    if (!candidates.length) return res.json({ executionId: null });
+
+    // Earliest among the qualifying ones — the first new execution to
+    // appear after the submit, not just "newest overall".
+    candidates.sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
+    res.json({ executionId: candidates[0].id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
