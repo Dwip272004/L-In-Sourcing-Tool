@@ -149,11 +149,40 @@ app.post("/api/submit", async (req, res) => {
 
 app.get("/api/status/:id", async (req, res) => {
   try {
-    const url = `${N8N_BASE_URL}/api/v1/executions/${req.params.id}?includeData=false`;
+    // includeData:true costs a bit more per poll but is the only way to see
+    // how many candidates have been found vs. fully processed so far, which
+    // is what turns the dashboard's ledger from a blind spinner into a real
+    // progress readout.
+    const url = `${N8N_BASE_URL}/api/v1/executions/${req.params.id}?includeData=true`;
     const r = await fetch(url, { headers: n8nHeaders() });
     if (!r.ok) return res.status(r.status).json({ error: `Status check failed (${r.status})` });
     const data = await r.json();
-    res.json({ status: data.status, finished: data.finished });
+
+    const runData = (data && data.data && data.data.resultData && data.data.resultData.runData) || {};
+
+    function itemCount(nodeName) {
+      const runs = runData[nodeName] || [];
+      let count = 0;
+      for (const run of runs) {
+        const mainOut = (run && run.data && run.data.main && run.data.main[0]) || [];
+        count += mainOut.length;
+      }
+      return count;
+    }
+
+    // "Split Candidates" fires once with the full pooled list — its single
+    // run's item count is the total to work through. "Merge RecruitCRM
+    // Slug" fires once per candidate that's fully scored, enriched, and
+    // filed, so its cumulative run count is progress made so far.
+    const totalCandidates = itemCount("Split Candidates") || null;
+    const processedCandidates = itemCount("Merge RecruitCRM Slug");
+
+    res.json({
+      status: data.status,
+      finished: data.finished,
+      totalCandidates,
+      processedCandidates
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
