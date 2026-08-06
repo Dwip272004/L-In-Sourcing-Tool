@@ -989,15 +989,29 @@
       const submitJson = await submitRes.json();
       showRaw(submitJson);
       if(!submitRes.ok || submitJson.error){
-        const idNote = submitJson.executionId ? ` (execution ${submitJson.executionId})` : "";
-        throw new Error((submitJson.error || "Submit failed.") + idNote);
+        throw new Error(submitJson.error || "Submit failed.");
       }
-      if(submitJson.warning){
-        ledgerLine(submitJson.warning, "err");
+
+      // Poll for the execution id ourselves, one short request at a time —
+      // deliberately not a single long-blocking call, since a big batch can
+      // now take several minutes and no individual request should have to
+      // survive that whole span.
+      ledgerLine("Waiting for n8n to pick it up…");
+      const findMaxAttempts = 60; // up to ~3 min at 3s
+      for(let attempt = 0; attempt < findMaxAttempts && !executionId; attempt++){
+        await new Promise(r => setTimeout(r, 3000));
+        try{
+          const findRes = await fetch(`/api/find-execution?since=${encodeURIComponent(submitJson.submittedAt)}`);
+          const findJson = await findRes.json();
+          if(findJson.executionId) executionId = findJson.executionId;
+        } catch(err){ /* transient, keep polling */ }
+      }
+
+      if(!executionId){
+        ledgerLine("The workflow started fine but is taking a while for n8n to list — check the History panel in a bit, or the Candidates sheet / RecruitCRM directly.", "err");
         setStatus("err", "Unconfirmed");
         return;
       }
-      executionId = submitJson.executionId;
       ledgerLine(`Running (#${executionId})`, "ok");
     } catch(err){
       ledgerLine("Could not start the workflow: " + err.message, "err");
