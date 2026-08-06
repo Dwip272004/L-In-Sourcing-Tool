@@ -696,6 +696,8 @@
         const isTop20 = idx < 20;
         el.className = "cc " + tier + (alreadyAssigned ? " assigned" : "") + (isTop20 ? " top20" : "");
         if(c.recruitcrm_slug) el.dataset.slug = c.recruitcrm_slug;
+        el.dataset.name = c.name || "";
+        el.dataset.profileUrl = c.public_profile_url || "";
         const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
         const cardId = "cc-" + idx + "-" + Date.now();
         const initials = (c.name || "?").trim().split(/\s+/).map(p => p[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
@@ -809,10 +811,9 @@
     const jobInput = bar.querySelector(".assign-job-input");
     const statusEl = bar.querySelector(".assign-status");
 
-    // Mass-select works by toggling each checkbox and dispatching a real
-    // "change" event, so the existing per-checkbox handler (which owns
-    // assignSelection) stays the single source of truth — no duplicate
-    // selection logic to keep in sync.
+    // Mass-select builds assignSelection directly from each card's dataset
+    // rather than relying on a dispatched "change" event to reach the
+    // per-checkbox listener — self-contained, so it can't silently no-op.
     bar.querySelectorAll(".assign-mass-btn").forEach(massBtn => {
       massBtn.addEventListener("click", () => {
         const mode = massBtn.dataset.mass;
@@ -824,11 +825,20 @@
             : mode === "top20" ? card.classList.contains("top20")
             : mode === "first50" ? cardIdx < 50
             : false;
-          if(cb.checked !== shouldCheck){
-            cb.checked = shouldCheck;
-            cb.dispatchEvent(new Event("change"));
+          cb.checked = shouldCheck;
+          const slug = card.dataset.slug;
+          if(!slug) return;
+          if(shouldCheck){
+            assignSelection.set(slug, {
+              slug: slug,
+              name: card.dataset.name || "",
+              public_profile_url: card.dataset.profileUrl || ""
+            });
+          } else {
+            assignSelection.delete(slug);
           }
         });
+        updateAssignBar(bar);
       });
     });
 
@@ -900,12 +910,12 @@
       wrap.appendChild(t);
     }
 
-    if(summary){
+    if(candidates && candidates.length){
       const s = document.createElement("div");
       s.className = "summary";
       s.innerHTML = `
-        <span class="count">${summary.count ?? "—"}</span>
-        <span class="label">candidate${(summary.count === 1) ? "" : "s"} added to RecruitCRM (unassigned) from this run</span>
+        <span class="count">${candidates.length}</span>
+        <span class="label">candidate${(candidates.length === 1) ? "" : "s"} added to RecruitCRM (unassigned) from this run</span>
       `;
       wrap.appendChild(s);
     }
