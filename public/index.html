@@ -779,10 +779,10 @@
     bar.className = "assign-bar";
     bar.innerHTML = `
       <div class="assign-bar-row">
-        <span class="assign-hint">Check candidates below, then assign the selected ones to a job. Everyone else stays in RecruitCRM as an unassigned candidate.</span>
+        <span class="assign-hint">Check candidates below, then assign the selected ones to a job — or leave the job blank and confirm they stay unassigned. Everyone left unchecked isn't touched.</span>
       </div>
       <div class="assign-bar-row">
-        <input type="text" class="assign-job-input" placeholder="RecruitCRM job name" value="${escapeHtml(defaultJob || "")}" />
+        <input type="text" class="assign-job-input" placeholder="RecruitCRM job name (optional)" value="${escapeHtml(defaultJob || "")}" />
         <button type="button" class="assign-btn" disabled>Assign selected (<span class="assign-count">0</span>)</button>
       </div>
       <div class="assign-status"></div>
@@ -793,11 +793,6 @@
 
     btn.addEventListener("click", async () => {
       const jobQuery = jobInput.value.trim();
-      if(!jobQuery){
-        statusEl.className = "assign-status err";
-        statusEl.textContent = "Enter a RecruitCRM job name first.";
-        return;
-      }
       const candidates = Array.from(assignSelection.values());
       btn.disabled = true;
       btn.textContent = "Assigning…";
@@ -813,25 +808,31 @@
         const data = await res.json();
         if(!res.ok || data.error) throw new Error(data.error || "Assignment failed.");
 
-        const assignedCount = data.assignedCount ?? candidates.length;
-        const failedCount = data.failedCount ?? 0;
-        statusEl.className = "assign-status ok";
-        statusEl.textContent = `Assigned ${assignedCount} to ${data.jobName || jobQuery}` +
-          (failedCount ? ` — ${failedCount} failed (${(data.failedNames || []).join("; ")})` : ".");
+        if(data.skipped){
+          statusEl.className = "assign-status ok";
+          statusEl.textContent = data.message || "No job specified — selected candidates already exist in RecruitCRM as unassigned candidates.";
+          assignSelection.clear();
+        } else {
+          const assignedCount = data.assignedCount ?? candidates.length;
+          const failedCount = data.failedCount ?? 0;
+          statusEl.className = "assign-status ok";
+          statusEl.textContent = `Assigned ${assignedCount} to ${data.jobName || jobQuery}` +
+            (failedCount ? ` — ${failedCount} failed (${(data.failedNames || []).join("; ")})` : ".");
 
-        candidates.forEach(c => {
-          const card = wrap.querySelector(`.cc[data-slug="${CSS.escape(c.slug)}"]`);
-          if(!card) return;
-          card.classList.add("assigned");
-          const badge = card.querySelector(".cc-assigned-badge");
-          if(badge){
-            badge.style.display = "";
-            badge.textContent = "Assigned → " + (data.jobName || jobQuery);
-          }
-          const cb = card.querySelector(".cc-select");
-          if(cb) cb.checked = false;
-        });
-        assignSelection.clear();
+          candidates.forEach(c => {
+            const card = wrap.querySelector(`.cc[data-slug="${CSS.escape(c.slug)}"]`);
+            if(!card) return;
+            card.classList.add("assigned");
+            const badge = card.querySelector(".cc-assigned-badge");
+            if(badge){
+              badge.style.display = "";
+              badge.textContent = "Assigned → " + (data.jobName || jobQuery);
+            }
+            const cb = card.querySelector(".cc-select");
+            if(cb) cb.checked = false;
+          });
+          assignSelection.clear();
+        }
       } catch(err){
         statusEl.className = "assign-status err";
         statusEl.textContent = err.message;
