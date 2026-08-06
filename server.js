@@ -108,8 +108,8 @@ app.post("/api/submit", async (req, res) => {
     // but ONLY among executions that started at/after submitFloor, so a
     // stale prior execution can never be picked up by mistake.
     let executionId = null;
-    for (let attempt = 0; attempt < 10 && !executionId; attempt++) {
-      await new Promise((r) => setTimeout(r, 1200));
+    for (let attempt = 0; attempt < 20 && !executionId; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500));
       const listUrl = `${N8N_BASE_URL}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=10`;
       const listRes = await fetch(listUrl, { headers: n8nHeaders() });
       if (listRes.ok) {
