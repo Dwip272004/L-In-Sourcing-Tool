@@ -350,9 +350,6 @@ app.post("/api/assign-job", async (req, res) => {
   try {
     const { jobQuery, candidates } = req.body || {};
 
-    if (!jobQuery || !String(jobQuery).trim()) {
-      return res.status(400).json({ error: "A RecruitCRM job name is required to assign candidates." });
-    }
     if (!Array.isArray(candidates) || candidates.length === 0) {
       return res.status(400).json({ error: "Select at least one candidate to assign." });
     }
@@ -368,6 +365,22 @@ app.post("/api/assign-job", async (req, res) => {
     if (cleanCandidates.length === 0) {
       return res.status(400).json({
         error: "None of the selected candidates have a RecruitCRM slug yet — they may still be mid-run. Try again once the run finishes."
+      });
+    }
+
+    // No job given — nothing to assign. Every sourced candidate is already
+    // created in RecruitCRM as an unassigned candidate by the main workflow,
+    // so this is a no-op confirmation rather than an error, and we skip
+    // calling n8n entirely.
+    if (!jobQuery || !String(jobQuery).trim()) {
+      return res.json({
+        skipped: true,
+        jobName: null,
+        assignedCount: 0,
+        failedCount: 0,
+        assignedNames: [],
+        failedNames: [],
+        message: `No job specified — the ${cleanCandidates.length} selected candidate${cleanCandidates.length === 1 ? "" : "s"} already exist in RecruitCRM as unassigned candidates.`
       });
     }
 
