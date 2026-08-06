@@ -339,6 +339,51 @@
     margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rule);
   }
 
+  .cc-select-row{
+    display:flex; align-items:center; justify-content: space-between; gap:8px;
+    margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--rule);
+  }
+  .cc-select-label{
+    display:flex; align-items:center; gap:6px;
+    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft);
+    cursor:pointer;
+  }
+  .cc-select-label input[type=checkbox]{ accent-color: var(--teal-deep); width:13px; height:13px; cursor:pointer; }
+  .cc-select-label input[type=checkbox]:disabled{ cursor: not-allowed; }
+  .cc-assigned-badge{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing:0.03em;
+    color: var(--teal-deep); background: rgba(43,110,99,0.1);
+    border: 1px solid var(--teal); border-radius: 8px; padding: 2px 7px; white-space: nowrap;
+  }
+  .cc.assigned{ border-left-color: var(--teal); }
+
+  .assign-bar{
+    margin: 0 24px 4px;
+    padding: 14px 16px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+  }
+  .assign-bar-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .assign-bar-row + .assign-bar-row{ margin-top: 10px; }
+  .assign-hint{ font-size: 11.5px; color: var(--ink-soft); line-height:1.4; }
+  .assign-job-input{
+    flex: 1; min-width: 200px;
+    font-family:'IBM Plex Sans', sans-serif; font-size: 12.5px;
+    padding: 8px 10px; background:#FBFAF6; border:1px solid var(--rule); border-radius:2px; color: var(--ink);
+  }
+  .assign-job-input:focus{ outline:none; border-color: var(--teal); box-shadow: 0 0 0 2px rgba(43,110,99,0.18); }
+  .assign-btn{
+    font-family:'IBM Plex Mono', monospace; font-size: 11.5px; letter-spacing:0.04em; text-transform: uppercase;
+    padding: 9px 14px; background: var(--ink); color: var(--paper-raised); border:none; border-radius:2px; cursor:pointer;
+    white-space: nowrap;
+  }
+  .assign-btn:hover:not(:disabled){ background: var(--teal-deep); }
+  .assign-btn:disabled{ opacity:0.5; cursor:not-allowed; }
+  .assign-status{ font-size: 11px; font-family:'IBM Plex Mono', monospace; margin-top: 2px; min-height: 14px; }
+  .assign-status.ok{ color: var(--teal-deep); }
+  .assign-status.err{ color: var(--rust); }
+
   .cc-badges{ display:flex; gap:6px; margin-top: 10px; flex-wrap: wrap; }
   .cc-badge{
     font-family:'IBM Plex Mono', monospace; font-size: 10px;
@@ -624,7 +669,11 @@
     return String(str).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
   }
 
-  function buildCandidateCards(cardsWrap, candidates){
+  // Tracks which candidates are checked for job assignment, keyed by
+  // RecruitCRM slug. Cleared whenever a fresh board is rendered.
+  let assignSelection = new Map();
+
+  function buildCandidateCards(cardsWrap, candidates, assignBar){
     if(candidates && candidates.length){
       candidates.forEach((c, idx) => {
         const score = c.fit_score;
@@ -632,7 +681,9 @@
         const tier = tierFor(numericScore);
         const ringColor = tier === "tier-high" ? "var(--teal)" : tier === "tier-mid" ? "var(--amber)" : "var(--rule)";
         const el = document.createElement("div");
-        el.className = "cc " + tier;
+        const alreadyAssigned = !!c.assigned_job;
+        el.className = "cc " + tier + (alreadyAssigned ? " assigned" : "");
+        if(c.recruitcrm_slug) el.dataset.slug = c.recruitcrm_slug;
         const tags = (c.matched_signals || "").split(",").map(s=>s.trim()).filter(Boolean).slice(0,4);
         const cardId = "cc-" + idx + "-" + Date.now();
         const initials = (c.name || "?").trim().split(/\s+/).map(p => p[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
@@ -670,7 +721,29 @@
             ${c.email && c.email !== "Not found" ? `<span class="cc-email">${escapeHtml(c.email)}</span>` : ""}
           </div>
           ${(tier === "tier-high" || tier === "tier-mid") && numericScore > 60 ? `<div class="cc-crm">Filed to RecruitCRM</div>` : ""}
-        `;
+          <div class="cc-select-row">
+            <label class="cc-select-label">
+              <input type="checkbox" class="cc-select" ${c.recruitcrm_slug ? "" : "disabled"} />
+              <span>${c.recruitcrm_slug ? "Select to assign" : "No RecruitCRM record yet"}</span>
+            </label>
+            <span class="cc-assigned-badge" style="${alreadyAssigned ? "" : "display:none;"}">${alreadyAssigned ? "Assigned → " + escapeHtml(c.assigned_job) : ""}</span>
+          </div>`;
+
+        if(assignBar){
+          const checkbox = el.querySelector(".cc-select");
+          checkbox.addEventListener("change", () => {
+            if(checkbox.checked){
+              assignSelection.set(c.recruitcrm_slug, {
+                slug: c.recruitcrm_slug,
+                name: c.name || "",
+                public_profile_url: c.public_profile_url || ""
+              });
+            } else {
+              assignSelection.delete(c.recruitcrm_slug);
+            }
+            updateAssignBar(assignBar);
+          });
+        }
         cardsWrap.appendChild(el);
       });
 
@@ -691,6 +764,87 @@
     }
   }
 
+  function updateAssignBar(bar){
+    const count = assignSelection.size;
+    bar.querySelector(".assign-count").textContent = count;
+    bar.querySelector(".assign-btn").disabled = count === 0;
+  }
+
+  // Selecting candidates + a job name here does NOT create anything new in
+  // RecruitCRM — every sourced candidate is already created there
+  // (unassigned) by the main workflow. This just assigns the checked ones
+  // to a job; anyone left unchecked stays unassigned.
+  function buildAssignToolbar(wrap, defaultJob){
+    const bar = document.createElement("div");
+    bar.className = "assign-bar";
+    bar.innerHTML = `
+      <div class="assign-bar-row">
+        <span class="assign-hint">Check candidates below, then assign the selected ones to a job. Everyone else stays in RecruitCRM as an unassigned candidate.</span>
+      </div>
+      <div class="assign-bar-row">
+        <input type="text" class="assign-job-input" placeholder="RecruitCRM job name" value="${escapeHtml(defaultJob || "")}" />
+        <button type="button" class="assign-btn" disabled>Assign selected (<span class="assign-count">0</span>)</button>
+      </div>
+      <div class="assign-status"></div>
+    `;
+    const btn = bar.querySelector(".assign-btn");
+    const jobInput = bar.querySelector(".assign-job-input");
+    const statusEl = bar.querySelector(".assign-status");
+
+    btn.addEventListener("click", async () => {
+      const jobQuery = jobInput.value.trim();
+      if(!jobQuery){
+        statusEl.className = "assign-status err";
+        statusEl.textContent = "Enter a RecruitCRM job name first.";
+        return;
+      }
+      const candidates = Array.from(assignSelection.values());
+      btn.disabled = true;
+      btn.textContent = "Assigning…";
+      statusEl.className = "assign-status";
+      statusEl.textContent = "";
+
+      try{
+        const res = await fetch("/api/assign-job", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobQuery, candidates })
+        });
+        const data = await res.json();
+        if(!res.ok || data.error) throw new Error(data.error || "Assignment failed.");
+
+        const assignedCount = data.assignedCount ?? candidates.length;
+        const failedCount = data.failedCount ?? 0;
+        statusEl.className = "assign-status ok";
+        statusEl.textContent = `Assigned ${assignedCount} to ${data.jobName || jobQuery}` +
+          (failedCount ? ` — ${failedCount} failed (${(data.failedNames || []).join("; ")})` : ".");
+
+        candidates.forEach(c => {
+          const card = wrap.querySelector(`.cc[data-slug="${CSS.escape(c.slug)}"]`);
+          if(!card) return;
+          card.classList.add("assigned");
+          const badge = card.querySelector(".cc-assigned-badge");
+          if(badge){
+            badge.style.display = "";
+            badge.textContent = "Assigned → " + (data.jobName || jobQuery);
+          }
+          const cb = card.querySelector(".cc-select");
+          if(cb) cb.checked = false;
+        });
+        assignSelection.clear();
+      } catch(err){
+        statusEl.className = "assign-status err";
+        statusEl.textContent = err.message;
+      } finally {
+        btn.innerHTML = `Assign selected (<span class="assign-count">${assignSelection.size}</span>)`;
+        updateAssignBar(bar);
+      }
+    });
+
+    wrap.appendChild(bar);
+    return bar;
+  }
+
   function renderResults(candidates, summary){
     const wrap = document.createElement("div");
 
@@ -699,14 +853,17 @@
       s.className = "summary";
       s.innerHTML = `
         <span class="count">${summary.count ?? "—"}</span>
-        <span class="label">candidate${(summary.count === 1) ? "" : "s"} filed to RecruitCRM under <span class="job">${escapeHtml(summary.jobName || "—")}</span></span>
+        <span class="label">candidate${(summary.count === 1) ? "" : "s"} added to RecruitCRM (unassigned) from this run</span>
       `;
       wrap.appendChild(s);
     }
 
+    assignSelection = new Map();
+    const assignBar = buildAssignToolbar(wrap, $("recruitCrmJob") ? $("recruitCrmJob").value.trim() : "");
+
     const cardsWrap = document.createElement("div");
     cardsWrap.className = "cards";
-    buildCandidateCards(cardsWrap, candidates);
+    buildCandidateCards(cardsWrap, candidates, assignBar);
     wrap.appendChild(cardsWrap);
     board.appendChild(wrap);
   }
@@ -727,9 +884,12 @@
     `;
     wrap.appendChild(s);
 
+    assignSelection = new Map();
+    const assignBar = buildAssignToolbar(wrap, "");
+
     const cardsWrap = document.createElement("div");
     cardsWrap.className = "cards";
-    buildCandidateCards(cardsWrap, item.candidates || []);
+    buildCandidateCards(cardsWrap, item.candidates || [], assignBar);
     wrap.appendChild(cardsWrap);
     board.appendChild(wrap);
   }
