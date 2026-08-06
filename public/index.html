@@ -928,12 +928,23 @@
 
     ledgerLine("Searching LinkedIn, scoring fits…");
     let finalStatus = null;
+    let progressLine = null;
     const maxAttempts = 90; // ~4.5 min at 3s
     for(let attempt = 0; attempt < maxAttempts; attempt++){
       await new Promise(r => setTimeout(r, 3000));
       try{
         const statusRes = await fetch(`/api/status/${executionId}`);
         const statusJson = await statusRes.json();
+
+        if(statusJson.totalCandidates){
+          const text = `Scored & filed ${statusJson.processedCandidates || 0} of ${statusJson.totalCandidates} candidates…`;
+          if(progressLine){
+            progressLine.querySelector(".m").textContent = text;
+          } else {
+            progressLine = ledgerLine(text);
+          }
+        }
+
         if(statusJson.status === "success" || statusJson.finished === true){ finalStatus = "success"; break; }
         if(statusJson.status === "error" || statusJson.status === "crashed"){ finalStatus = "error"; break; }
       } catch(err){ /* transient, keep polling */ }
