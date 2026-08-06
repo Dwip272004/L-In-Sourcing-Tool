@@ -293,7 +293,7 @@ app.get("/api/sheet-overview", async (req, res) => {
     for (const c of candidates) {
       const key = c["Search Keywords"] || "(unknown search)";
       if (!bySearch[key]) {
-        bySearch[key] = { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null, candidates: [] };
+        bySearch[key] = { count: 0, qualified: 0, scoreSum: 0, scoreCount: 0, lastSourced: null, candidates: [], totalFoundOnLinkedIn: null };
       }
       const bucket = bySearch[key];
       bucket.count += 1;
@@ -303,6 +303,11 @@ app.get("/api/sheet-overview", async (req, res) => {
         bucket.scoreCount += 1;
         if (score > 60) bucket.qualified += 1;
       }
+      // Reads the "LinkedIn Total Found" column once it exists on the sheet
+      // — every row for the same search carries the same number, so the
+      // first non-empty one found is enough.
+      const totalFound = parseInt(c["LinkedIn Total Found"], 10);
+      if (!bucket.totalFoundOnLinkedIn && !isNaN(totalFound)) bucket.totalFoundOnLinkedIn = totalFound;
       const sourcedAt = c["Sourced At"];
       if (sourcedAt && (!bucket.lastSourced || sourcedAt > bucket.lastSourced)) bucket.lastSourced = sourcedAt;
       bucket.candidates.push(mapCandidateRow(c));
@@ -338,6 +343,7 @@ app.get("/api/sheet-overview", async (req, res) => {
           qualifiedCount: stats.qualified,
           avgFitScore: stats.scoreCount ? Math.round(stats.scoreSum / stats.scoreCount) : null,
           lastSourcedAt: stats.lastSourced,
+          totalFoundOnLinkedIn: stats.totalFoundOnLinkedIn,
           candidates: stats.candidates
         };
       })
