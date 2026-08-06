@@ -12,6 +12,7 @@ const {
   N8N_API_KEY,                                          // n8n Settings > API > create an API key
   N8N_FORM_WEBHOOK_ID = "696576aa-5fbe-4b76-849d-fd81f5f0cb2a", // "Sourcing Request Form" node's webhookId
   N8N_WORKFLOW_ID = "jo9Q690CzrUwUZPv",
+  N8N_ASSIGN_WEBHOOK_PATH = "assign-to-job",           // "Assign To Job Webhook" node's path
   SHEET_ID = "1Jss-cmGXu_8jMzplRZYJgYxPCkOncP0vTbbDwYEci7w", // the Candidates sourcing Google Sheet
   SEARCH_REQUESTS_TAB = "Search Requests",
   CANDIDATES_TAB = "Candidates",
@@ -216,7 +217,10 @@ function mapCandidateRow(row) {
     gaps: pick("Gaps", "gaps"),
     email: pick("Email", "email"),
     email_status: pick("Email Status", "email_status"),
-    sourced_at: pick("Sourced At", "sourced_at")
+    sourced_at: pick("Sourced At", "sourced_at"),
+    recruitcrm_slug: pick("RecruitCRM Slug", "recruitcrm_slug"),
+    assigned_job: pick("Assigned Job", "assigned_job"),
+    assigned_at: pick("Assigned At", "assigned_at")
   };
 }
 
@@ -318,11 +322,75 @@ app.get("/api/results/:id", async (req, res) => {
       return items;
     }
 
-    const candidates = nodeItems("Extract Enriched Email");
+    // "Merge RecruitCRM Slug" carries everything "Extract Enriched Email" has
+    // plus recruitcrm_slug, needed so freshly-sourced candidates can be
+    // selected for job assignment without waiting on a sheet refresh.
+    const candidates = nodeItems("Merge RecruitCRM Slug");
     const summaryItems = nodeItems("Build CRM Upload Summary");
     const summary = summaryItems[0] || null;
 
     res.json({ candidates, summary });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Assigns the recruiter's SELECTED candidates to a RecruitCRM job.
+ *
+ * Every sourced candidate is already created in RecruitCRM (unassigned) by
+ * the main workflow — this endpoint does not create anything. It just
+ * triggers the "Assign To Job Webhook" branch added to the n8n workflow,
+ * which resolves the job name to a slug and calls RecruitCRM's
+ * POST /v1/candidates/{slug}/assign for each selected candidate. Candidates
+ * left unchecked are simply not touched, so they stay in RecruitCRM as
+ * unassigned candidates — which is the desired default.
+ */
+app.post("/api/assign-job", async (req, res) => {
+  try {
+    const { jobQuery, candidates } = req.body || {};
+
+    if (!jobQuery || !String(jobQuery).trim()) {
+      return res.status(400).json({ error: "A RecruitCRM job name is required to assign candidates." });
+    }
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      return res.status(400).json({ error: "Select at least one candidate to assign." });
+    }
+
+    const cleanCandidates = candidates
+      .filter((c) => c && c.slug)
+      .map((c) => ({
+        slug: c.slug,
+        name: c.name || "",
+        public_profile_url: c.public_profile_url || ""
+      }));
+
+    if (cleanCandidates.length === 0) {
+      return res.status(400).json({
+        error: "None of the selected candidates have a RecruitCRM slug yet — they may still be mid-run. Try again once the run finishes."
+      });
+    }
+
+    const webhookUrl = `https://diwp645.app.n8n.cloud/webhook/${N8N_ASSIGN_WEBHOOK_PATH}`;
+    const assignRes = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobQuery: String(jobQuery).trim(), candidates: cleanCandidates })
+    });
+
+    const text = await assignRes.text().catch(() => "");
+    let payload;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+
+    if (!assignRes.ok) {
+      return res.status(assignRes.status).json({ error: payload.error || `Assignment webhook failed (${assignRes.status}).` });
+    }
+
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
