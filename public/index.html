@@ -897,6 +897,21 @@
     return bar;
   }
 
+  // Surfaces a clear, visible reason when none of the rendered candidates
+  // can be selected — e.g. history-view candidates before the RecruitCRM
+  // Slug column existed on the sheet. Previously this was only signaled by
+  // small per-card text, easy to miss, which made mass-select look broken
+  // when it was correctly skipping disabled checkboxes.
+  function checkAssignAvailability(cardsWrap, assignBar, candidates){
+    if(!candidates || !candidates.length) return;
+    const enabledCount = cardsWrap.querySelectorAll(".cc-select:not(:disabled)").length;
+    if(enabledCount === 0){
+      const statusEl = assignBar.querySelector(".assign-status");
+      statusEl.className = "assign-status err";
+      statusEl.textContent = "None of these candidates have a RecruitCRM record on file (common for older history entries) — selection is unavailable for all of them here. Try a fresh run instead.";
+    }
+  }
+
   function renderResults(candidates, summary, totalFoundOnLinkedIn){
     const wrap = document.createElement("div");
 
@@ -926,6 +941,7 @@
     const cardsWrap = document.createElement("div");
     cardsWrap.className = "cards";
     buildCandidateCards(cardsWrap, candidates, assignBar);
+    checkAssignAvailability(cardsWrap, assignBar, candidates);
     wrap.appendChild(cardsWrap);
     board.appendChild(wrap);
   }
@@ -953,6 +969,7 @@
     const cardsWrap = document.createElement("div");
     cardsWrap.className = "cards";
     buildCandidateCards(cardsWrap, item.candidates || [], assignBar);
+    checkAssignAvailability(cardsWrap, assignBar, item.candidates || []);
     wrap.appendChild(cardsWrap);
     board.appendChild(wrap);
   }
