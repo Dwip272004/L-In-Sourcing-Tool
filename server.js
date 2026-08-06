@@ -82,6 +82,17 @@ app.post("/api/submit", async (req, res) => {
     // Render service logs after a test submit.
     console.log("[submit] forwarding positional fields to n8n:", Object.fromEntries(form.entries()));
 
+    // Recorded BEFORE triggering the webhook, with a generous clock-skew
+    // buffer. This is the guard against the real bug we hit: n8n's execution
+    // list has a brief indexing delay after a webhook fires, and during that
+    // gap the "newest execution" in the list can be a completely unrelated
+    // PRIOR run that happens to still be the most recent one indexed. Without
+    // a time floor, that stale execution gets mistaken for the one we just
+    // triggered — the dashboard then reports whatever that old run's status
+    // was (often an already-failed one) while the real new execution keeps
+    // running, unwatched, in the background.
+    const submitFloor = new Date(Date.now() - 10000).toISOString();
+
     const webhookUrl = `https://diwp645.app.n8n.cloud/form/696576aa-5fbe-4b76-849d-fd81f5f0cb2a`;
     const submitRes = await fetch(webhookUrl, { method: "POST", body: form });
     if (!submitRes.ok) {
@@ -93,18 +104,23 @@ app.post("/api/submit", async (req, res) => {
 
     // Give n8n a moment to create the execution record, then look it up.
     // The form webhook itself doesn't return an execution id, so we find
-    // the newest execution for this workflow right after triggering it.
+    // the newest execution for this workflow right after triggering it —
+    // but ONLY among executions that started at/after submitFloor, so a
+    // stale prior execution can never be picked up by mistake.
     let executionId = null;
-    for (let attempt = 0; attempt < 6 && !executionId; attempt++) {
+    for (let attempt = 0; attempt < 10 && !executionId; attempt++) {
       await new Promise((r) => setTimeout(r, 1200));
-      const listUrl = `${N8N_BASE_URL}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=5`;
+      const listUrl = `${N8N_BASE_URL}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=10`;
       const listRes = await fetch(listUrl, { headers: n8nHeaders() });
       if (listRes.ok) {
         const data = await listRes.json();
         const executions = data.data || [];
-        if (executions.length) {
-          executions.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
-          executionId = executions[0].id;
+        const candidates = executions.filter((e) => e.startedAt && e.startedAt >= submitFloor);
+        if (candidates.length) {
+          // Earliest among the qualifying ones — i.e. the first new
+          // execution to appear after our submit, not just "newest overall".
+          candidates.sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
+          executionId = candidates[0].id;
         }
       }
     }
